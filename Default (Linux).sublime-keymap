@@ -1,0 +1,26 @@
+[
+	{
+		"keys": ["enter"],
+		"command": "gidterm_enter",
+		"context":
+			[
+				{ "key": "setting.is_gidterm", "operator": "equal", "operand": true }
+			]
+	},
+	{
+		"keys": ["insert"],
+		"command": "gidterm_insert",
+		"context":
+			[
+				{ "key": "setting.is_gidterm", "operator": "equal", "operand": true }
+			]
+	},
+	{
+		"keys": ["delete"],
+		"command": "gidterm_delete",
+		"context":
+			[
+				{ "key": "setting.is_gidterm", "operator": "equal", "operand": true }
+			]
+	}
+]
