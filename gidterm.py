@@ -22,11 +22,16 @@ export PS0='[gidterm-output@\\D{%Y%m%dT%H%M%S%z}@]'
 export PS2='[gidterm-more@]'
 export PS3='[gidterm-ps3@]'
 export PS4='[gidterm-trace@]'
-export TERM=linux
-# Keep a large screen size, since Sublime can deal with wrapping/paging
+export TERM=ansi
+# Set COLUMNS to a standard size for commands run by the shell to avoid tools
+# creating wonky output, e.g. many tools display a completion percentage on the
+# right side of the screen
 shopt -u checkwinsize
-export LINES=32767
-export COLUMNS=32767
+export COLUMNS=80
+# Avoid paging by using cat as the default pager
+export PAGER=/bin/cat
+# Don't add control commands to the history
+export HISTIGNORE=${HISTIGNORE:+${HISTIGNORE}:}'*# [@gidterm@]'
 '''
 
 
@@ -62,11 +67,20 @@ class Shell:
         args = [
             'bash', '--rcfile', self.path
         ]
+        env = os.environ.update({
+            # If COLUMNS is the default of 80, the shell will break long
+            # prompts over two lines, making them harder to search for. It also
+            # allows the shell to use UP control characters to edit lines
+            # during command history navigation. Setting COLUMNS to a very
+            # large value avoids these behaviours.
+            'COLUMNS': '32767',
+            'TERM': 'ansi',
+        })
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             # child
             os.chdir(workdir)
-            os.execvp('bash', args)
+            os.execvpe('bash', args, env)
 
     def send(self, s):
         if s:
@@ -81,7 +95,7 @@ class Shell:
 
     def receive(self):
         # TODO: this might split a character
-        return os.read(self.fd, 4096).decode('utf8')
+        return os.read(self.fd, 4096).decode('utf8', 'replace')
 
 
 class GidtermShell:
@@ -176,7 +190,7 @@ class GidtermShell:
                     if pos != region.begin():
                         raise RuntimeError()
             else:
-                raise RuntimeError()
+                return None
         if pos is None:
             return self.view.size()
         else:
@@ -195,11 +209,10 @@ class GidtermShell:
             sublime.set_timeout(self.loop, 100)
 
     def handle_output(self, s):
-        escape_pat = re.compile(r'(\x07|(?:\x08+)|(?:\r+\n?)|(?:\x1b\[[0-9;]*[A-Za-z]))')
-        # TODO: catting this file will match the pattern
+        escape_pat = re.compile(r'(\x07|(?:\x08+)|(?:\r+\n?)|(?:\x1b\[[0-9;]*[^0-9;]))')
+        # TODO: catting this file will match the pattern (or running set or env)
         prompt_pat = re.compile(r'(\[gidterm-.+?@\])')
         parts = escape_pat.split(s)
-        print(parts)
         plain = False
         for part in parts:
             # TODO: we might have a partial escape
@@ -209,7 +222,6 @@ class GidtermShell:
                     texts = prompt_pat.split(part)
                     prompt = False
                     for text in texts:
-                        print(texts)
                         if prompt:
                             # remove [gidterm- ... @]
                             text = text[9:-2]
@@ -227,6 +239,9 @@ class GidtermShell:
                                             workdir
                                         )
                                     )
+                                    # Reset the output timestamp to None so that pressing enter
+                                    # for a blank line does not show an updated time since run
+                                    self.output_ts = None
                             elif text.startswith('output'):
                                 prefix, ts = text.split('@', 1)
                                 assert prefix == 'output', text
@@ -262,6 +277,19 @@ class GidtermShell:
                     if command == 'm':
                         # ignore color
                         pass
+                    elif command == '@':
+                        arg = part[2:-1]
+                        if arg:
+                            n = int(arg)
+                        else:
+                            n = 1
+                        insert = self.insert
+                        self.move_to(insert)
+                        overwrite = self.overwrite
+                        self.overwrite = False
+                        self.add(' ' * n)
+                        self.overwrite = overwrite
+                        self.insert = insert
                     elif command == 'C':
                         # right
                         arg = part[2:-1]
@@ -269,9 +297,8 @@ class GidtermShell:
                             n = int(arg)
                         else:
                             n = 1
-                        if self.insert + n <= self.view.size():
-                            self.insert += n
-                            self.move_to(self.insert)
+                        self.insert = min(self.insert + n, self.view.size())
+                        self.move_to(self.insert)
                     elif command == 'D':
                         # left
                         arg = part[2:-1]
@@ -279,9 +306,8 @@ class GidtermShell:
                             n = int(arg)
                         else:
                             n = 1
-                        if self.insert >= n:
-                            self.insert -= n
-                            self.move_to(self.insert)
+                        self.insert = max(self.insert - n, 0)
+                        self.move_to(self.insert)
                     elif command == 'K':
                         # clear to end of line
                         self.move_to(self.insert)
@@ -296,6 +322,7 @@ class GidtermShell:
                         region = sublime.Region(self.insert, end)
                         self.erase(region)
                     else:
+                        print(parts)
                         self.add(part)
 
     def loop(self):
@@ -337,8 +364,58 @@ _keyin_map = {
     'down': '\x1b[B',
     'right': '\x1b[C',
     'left': '\x1b[D',
+    'shift+ctrl+a': '\x01',
+    'shift+ctrl+A': '\x01',
+    'shift+ctrl+b': '\x02',
+    'shift+ctrl+B': '\x02',
     'shift+ctrl+c': '\x03',
     'shift+ctrl+C': '\x03',
+    'shift+ctrl+d': '\x04',
+    'shift+ctrl+D': '\x04',
+    'shift+ctrl+e': '\x05',
+    'shift+ctrl+E': '\x05',
+    'shift+ctrl+f': '\x06',
+    'shift+ctrl+F': '\x06',
+    'shift+ctrl+g': '\x07',
+    'shift+ctrl+G': '\x07',
+    'shift+ctrl+h': '\x08',
+    'shift+ctrl+H': '\x08',
+    'shift+ctrl+i': '\x09',
+    'shift+ctrl+I': '\x09',
+    'shift+ctrl+j': '\x10',
+    'shift+ctrl+J': '\x10',
+    'shift+ctrl+k': '\x11',
+    'shift+ctrl+K': '\x11',
+    'shift+ctrl+l': '\x12',
+    'shift+ctrl+L': '\x12',
+    'shift+ctrl+m': '\x13',
+    'shift+ctrl+M': '\x13',
+    'shift+ctrl+n': '\x14',
+    'shift+ctrl+N': '\x14',
+    'shift+ctrl+o': '\x15',
+    'shift+ctrl+O': '\x15',
+    'shift+ctrl+p': '\x16',
+    'shift+ctrl+P': '\x16',
+    'shift+ctrl+q': '\x17',
+    'shift+ctrl+Q': '\x17',
+    'shift+ctrl+r': '\x18',
+    'shift+ctrl+R': '\x18',
+    'shift+ctrl+s': '\x19',
+    'shift+ctrl+S': '\x19',
+    'shift+ctrl+t': '\x20',
+    'shift+ctrl+T': '\x20',
+    'shift+ctrl+u': '\x21',
+    'shift+ctrl+U': '\x21',
+    'shift+ctrl+v': '\x22',
+    'shift+ctrl+V': '\x22',
+    'shift+ctrl+w': '\x23',
+    'shift+ctrl+W': '\x23',
+    'shift+ctrl+x': '\x24',
+    'shift+ctrl+X': '\x24',
+    'shift+ctrl+y': '\x25',
+    'shift+ctrl+Y': '\x25',
+    'shift+ctrl+z': '\x26',
+    'shift+ctrl+Z': '\x26',
 }
 
 
