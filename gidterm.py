@@ -242,10 +242,11 @@ class GidtermShell:
                     # how do we notify user?
                     pass
                 elif part[0] == '\x08':
-                    begin = self.insert - len(part)
-                    region = sublime.Region(begin, self.insert)
-                    self.erase(region)
-                    self.insert = begin
+                    n = len(part)
+                    if n > self.insert:
+                        n = self.insert
+                    self.insert = self.insert - n
+                    self.move_to(self.insert)
                 elif part[0] == '\r':
                     if part[-1] == '\n':
                         self.add('\n')
