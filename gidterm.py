@@ -349,6 +349,20 @@ class GidtermInputCommand(sublime_plugin.TextCommand):
         if shell:
             s = _keyin_map.get(key, key)
             shell.send(s)
+        else:
+            print('disconnected')
+        return False
+
+
+class GidtermPasteCommand(sublime_plugin.TextCommand):
+
+    def run(self, edit):
+        shell = _shellmap.get(self.view.id())
+        if shell:
+            buf = sublime.get_clipboard()
+            shell.send(buf)
+        else:
+            print('disconnected')
         return False
 
 

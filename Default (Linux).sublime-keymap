@@ -1,5 +1,6 @@
 [
 {"keys": ["shift+ctrl+g"], "command": "gidterm"},
+{"keys": ["ctrl+v"], "command": "gidterm_paste", "context": [{"key": "setting.is_gidterm", "operator": "equal", "operand": true}]},
 {"keys": ["up"], "command": "gidterm_input", "args": {"key": "up"}, "context": [{"key": "setting.is_gidterm", "operator": "equal", "operand": true}]},
 {"keys": ["shift+up"], "command": "gidterm_input", "args": {"key": "shift+up"}, "context": [{"key": "setting.is_gidterm", "operator": "equal", "operand": true}]},
 {"keys": ["shift+ctrl+up"], "command": "gidterm_input", "args": {"key": "shift+ctrl+up"}, "context": [{"key": "setting.is_gidterm", "operator": "equal", "operand": true}]},
