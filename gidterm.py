@@ -372,6 +372,9 @@ class GidtermCommand(sublime_plugin.TextCommand):
         view.set_scratch(True)
         view.set_line_endings('Unix')
         view.set_read_only(True)
+        view.run_command(
+            "set_setting", {"setting": "spell_check", "value": False}
+        )
         window.focus_view(view)
         GidtermShell(view).start(cwd)
 
