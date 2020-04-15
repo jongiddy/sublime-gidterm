@@ -1,3 +1,4 @@
+import codecs
 import datetime
 import os
 import pty
@@ -15,7 +16,6 @@ _shellmap = {}
 
 profile = b'''
 if [ -r ~/.profile ]; then . ~/.profile; fi
-export LANG=C.UTF-8
 export PROMPT_COMMAND='PS1=[gidterm-input@\\\\D{%Y%m%dT%H%M%S%z}@$?@\\\\w@]'
 export PROMPT_DIRTRIM=
 export PS0='[gidterm-output@\\D{%Y%m%dT%H%M%S%z}@]'
@@ -35,12 +35,33 @@ export HISTIGNORE=${HISTIGNORE:+${HISTIGNORE}:}'*# [@gidterm@]'
 '''
 
 
+def gidterm_decode_error(e):
+    # If text is not Unicode, it is most likely Latin-1. Windows-1252 is a
+    # superset of Latin-1 and may be present in downloaded files.
+    # TODO: Use the LANG setting to select appropriate fallback encoding
+    b = e.object[e.start:e.end]
+    try:
+        s = b.decode('windows-1252')
+    except UnicodeDecodeError:
+        # If even that can't decode, fallback to using Unicode replacement char
+        s = b.decode('utf8', 'replace')
+    print('gidterm: [WARN] {}: replacing {!r} with {!r}'.format(
+        e.reason, b, s.encode('utf8')
+    ))
+    return s, e.end
+
+
+codecs.register_error('gidterm', gidterm_decode_error)
+
+
 class Shell:
 
     def __init__(self):
         self.pid = None
         self.fd = None
         self.path = None
+        utf8_decoder_factory = codecs.getincrementaldecoder('utf8')
+        self.decoder = utf8_decoder_factory(errors='gidterm')
 
     def __del__(self):
         self.close()
@@ -94,8 +115,7 @@ class Shell:
         return fd in rfds
 
     def receive(self):
-        # TODO: this might split a character
-        return os.read(self.fd, 4096).decode('utf8', 'replace')
+        return self.decoder.decode(os.read(self.fd, 8192))
 
 
 class GidtermShell:
@@ -334,7 +354,7 @@ class GidtermShell:
                 s = shell.receive()
                 if s:
                     self.handle_output(s)
-                    sublime.set_timeout(self.loop, 10)
+                    sublime.set_timeout(self.loop, 1)
                 else:
                     shell.close()
 
