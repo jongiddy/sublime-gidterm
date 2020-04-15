@@ -368,7 +368,7 @@ class GidtermCommand(sublime_plugin.TextCommand):
             cwd = os.path.dirname(filename)
         window = self.view.window()
         view = window.new_file()
-        view.set_name('gidterm')
+        view.set_name('[bash]')
         view.set_scratch(True)
         view.set_line_endings('Unix')
         view.set_read_only(True)
@@ -386,16 +386,14 @@ _keyin_map = {
     'left': '\x1b[D',
     'shift+ctrl+a': '\x01',
     'shift+ctrl+A': '\x01',
-    'shift+ctrl+b': '\x02',
-    'shift+ctrl+B': '\x02',
+    # shift+ctrl+b - use cursor left key instead
     'shift+ctrl+c': '\x03',
     'shift+ctrl+C': '\x03',
     'shift+ctrl+d': '\x04',
     'shift+ctrl+D': '\x04',
     'shift+ctrl+e': '\x05',
     'shift+ctrl+E': '\x05',
-    'shift+ctrl+f': '\x06',
-    'shift+ctrl+F': '\x06',
+    # shift+ctrl+f - use cursor right key instead
     'shift+ctrl+g': '\x07',
     'shift+ctrl+G': '\x07',
     'shift+ctrl+h': '\x08',
@@ -410,18 +408,15 @@ _keyin_map = {
     'shift+ctrl+L': '\x12',
     'shift+ctrl+m': '\x13',
     'shift+ctrl+M': '\x13',
-    'shift+ctrl+n': '\x14',
-    'shift+ctrl+N': '\x14',
+    # shift+ctrl+n - use cursor down key instead
     'shift+ctrl+o': '\x15',
     'shift+ctrl+O': '\x15',
-    'shift+ctrl+p': '\x16',
-    'shift+ctrl+P': '\x16',
+    # shift+ctrl+p - use cursor up key instead
     'shift+ctrl+q': '\x17',
     'shift+ctrl+Q': '\x17',
     'shift+ctrl+r': '\x18',
     'shift+ctrl+R': '\x18',
-    'shift+ctrl+s': '\x19',
-    'shift+ctrl+S': '\x19',
+    # shift+ctrl+s - no replacement
     'shift+ctrl+t': '\x20',
     'shift+ctrl+T': '\x20',
     'shift+ctrl+u': '\x21',
