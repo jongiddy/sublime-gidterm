@@ -431,6 +431,7 @@ _keyin_map = {
     'shift+ctrl+Y': '\x25',
     'shift+ctrl+z': '\x26',
     'shift+ctrl+Z': '\x26',
+    'shift+space': ' ',
 }
 
 
