@@ -16,12 +16,12 @@ _shellmap = {}
 
 profile = b'''
 if [ -r ~/.profile ]; then . ~/.profile; fi
-export PROMPT_COMMAND='PS1=[gidterm-input@\\\\D{%Y%m%dT%H%M%S%z}@$?@\\\\w@]'
+export PROMPT_COMMAND='PS1=\\\\e[1p\\\\D{%Y%m%dT%H%M%S%z}@$?@\\\\w\\\\e[~'
 export PROMPT_DIRTRIM=
-export PS0='[gidterm-output@\\D{%Y%m%dT%H%M%S%z}@]'
-export PS2='[gidterm-more@]'
-export PS3='[gidterm-ps3@]'
-export PS4='[gidterm-trace@]'
+export PS0='\\e[0p\\D{%Y%m%dT%H%M%S%z}\\e[~'
+export PS2='\\e[2!p'
+export PS3='\\e[3!p'
+export PS4='\\e[4!p'
 export TERM=ansi
 # Set COLUMNS to a standard size for commands run by the shell to avoid tools
 # creating wonky output, e.g. many tools display a completion percentage on the
@@ -128,6 +128,7 @@ class GidtermShell:
         self.insert = view.size()
         self.overwrite = True
         self.output_ts = None
+        self.prompt_type = None
         history = []
         settings = view.settings()
         settings.set('is_gidterm', True)
@@ -228,54 +229,34 @@ class GidtermShell:
             shell.fork(workdir)
             sublime.set_timeout(self.loop, 100)
 
+    def unbell(self):
+        self.view.set_name('[bash]')
+
     def handle_output(self, s):
-        escape_pat = re.compile(r'(\x07|(?:\x08+)|(?:\r+\n?)|(?:\x1b\[[0-9;]*[^0-9;]))')
-        # TODO: catting this file will match the pattern (or running set or env)
-        prompt_pat = re.compile(r'(\[gidterm-.+?@\])')
+        escape_pat = re.compile(
+            r'(\x07|'                               # BEL
+            r'(?:\x08+)|'                           # BACKSPACE's
+            r'(?:\r+\n?)|'                          # CR's possibly with a NL
+            r'(?:\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]))'  # CSI
+        )
         parts = escape_pat.split(s)
         plain = False
+        print(parts)
         for part in parts:
             # TODO: we might have a partial escape
             plain = not plain
             if plain:
+                # If we have plaintext, it is either real plaintext or the
+                # internal part of a PS0 or PS1 shell prompt.
                 if part:
-                    texts = prompt_pat.split(part)
-                    prompt = False
-                    for text in texts:
-                        if prompt:
-                            # remove [gidterm- ... @]
-                            text = text[9:-2]
-                            if text.startswith('input'):
-                                prefix, ts, status, workdir = text.split('@', 3)
-                                assert prefix == 'input', text
-                                input_ts = datetime.datetime.strptime(ts, '%Y%m%dT%H%M%S%z')
-                                if self.output_ts is None:
-                                    self.add('[{}]\n'.format(workdir))
-                                else:
-                                    self.add(
-                                        'status={} time={}\n[{}]\n'.format(
-                                            status,
-                                            input_ts - self.output_ts,
-                                            workdir
-                                        )
-                                    )
-                                    # Reset the output timestamp to None so that pressing enter
-                                    # for a blank line does not show an updated time since run
-                                    self.output_ts = None
-                            elif text.startswith('output'):
-                                prefix, ts = text.split('@', 1)
-                                assert prefix == 'output', text
-                                self.output_ts = datetime.datetime.strptime(ts, '%Y%m%dT%H%M%S%z')
-                            else:
-                                self.add(text)
-                        else:
-                            if text:
-                                self.add(text)
-                        prompt = not prompt
+                    if self.prompt_type is None:
+                        self.add(part)
+                    else:
+                        self.prompt_text += part
             else:
                 if part == '\x07':
-                    # how do we notify user?
-                    pass
+                    self.view.set_name('[BASH]')
+                    sublime.set_timeout(self.unbell, 250)
                 elif part[0] == '\x08':
                     n = len(part)
                     if n > self.insert:
@@ -294,7 +275,39 @@ class GidtermShell:
                         self.insert = self.position()
                 else:
                     command = part[-1]
-                    if command == 'm':
+                    if command == 'p':
+                        # prompt
+                        arg = part[2:-1]
+                        if arg.endswith('!'):
+                            self.add('<{}>'.format(arg))
+                        else:
+                            assert self.prompt_type is None, self.prompt_type
+                            self.prompt_type = arg
+                            self.prompt_text = ''
+                    elif command == '~':
+                        # end prompt
+                        if self.prompt_type == '0':
+                            ts = self.prompt_text
+                            self.output_ts = datetime.datetime.strptime(ts, '%Y%m%dT%H%M%S%z')
+                        else:
+                            assert self.prompt_type == '1', self.prompt_type
+                            ts, status, workdir = self.prompt_text.split('@', 2)
+                            input_ts = datetime.datetime.strptime(ts, '%Y%m%dT%H%M%S%z')
+                            if self.output_ts is None:
+                                self.add('[{}]\n'.format(workdir))
+                            else:
+                                self.add(
+                                    'status={} time={}\n[{}]\n'.format(
+                                        status,
+                                        input_ts - self.output_ts,
+                                        workdir
+                                    )
+                                )
+                                # Reset the output timestamp to None so that pressing enter
+                                # for a blank line does not show an updated time since run
+                                self.output_ts = None
+                        self.prompt_type = None
+                    elif command == 'm':
                         # ignore color
                         pass
                     elif command == '@':
@@ -342,7 +355,7 @@ class GidtermShell:
                         region = sublime.Region(self.insert, end)
                         self.erase(region)
                     else:
-                        print(parts)
+                        print('gidterm: [WARN] unknown control: {!r}'.format(part))
                         self.add(part)
 
     def loop(self):
