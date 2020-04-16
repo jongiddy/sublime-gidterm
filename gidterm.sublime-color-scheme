@@ -1,0 +1,46 @@
+{
+    "name": "GidTerm Color Scheme",
+    "rules":
+    [
+        {
+            "name": "Black",
+            "scope": "markup.normal.black",
+            "foreground": "#000"
+        },
+        {
+            "name": "Red",
+            "scope": "markup.normal.red",
+            "foreground": "#de382b",
+        },
+        {
+            "name": "Green",
+            "scope": "markup.normal.green",
+            "foreground": "#39b54a",
+        },
+        {
+            "name": "Yellow",
+            "scope": "markup.normal.yellow",
+            "foreground": "#ffc706",
+        },
+        {
+            "name": "Blue",
+            "scope": "markup.normal.blue",
+            "foreground": "#006fb8",
+        },
+        {
+            "name": "Magenta",
+            "scope": "markup.normal.magenta",
+            "foreground": "#762671",
+        },
+        {
+            "name": "Cyan",
+            "scope": "markup.normal.cyan",
+            "foreground": "#2cb5e9",
+        },
+        {
+            "name": "White",
+            "scope": "markup.normal.white",
+            "foreground": "#ccc",
+        }
+    ]
+}

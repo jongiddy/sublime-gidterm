@@ -1,0 +1,11 @@
+%YAML 1.2
+---
+# See http://www.sublimetext.com/docs/3/syntax.html
+name: GidTerm
+scope: text.terminal
+hidden: true
+
+contexts:
+  main:
+    - match: \b(if|then|else|fi|while|do|done)\b
+      scope: keyword.control.c

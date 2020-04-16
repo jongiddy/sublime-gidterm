@@ -129,11 +129,8 @@ class GidtermShell:
         self.overwrite = True
         self.output_ts = None
         self.prompt_type = None
-        history = []
-        settings = view.settings()
-        settings.set('is_gidterm', True)
-        settings.set('command_history', history)
-        settings.set('command_index', 0)
+        self.scope = None
+
         shell = Shell()
         _shellmap[view.id()] = shell
 
@@ -164,6 +161,10 @@ class GidtermShell:
             )
             view.set_read_only(True)
             end = view.size()
+            if self.scope is not None:
+                regions = view.get_regions(self.scope)
+                regions.append(sublime.Region(self.insert, end))
+                view.add_regions(self.scope, regions, self.scope, flags=sublime.PERSISTENT)
             self.insert = end
         else:
             begin = self.insert
@@ -241,7 +242,8 @@ class GidtermShell:
         )
         parts = escape_pat.split(s)
         plain = False
-        print(parts)
+        if len(parts) > 1:
+            print(parts)
         for part in parts:
             # TODO: we might have a partial escape
             plain = not plain
@@ -293,23 +295,50 @@ class GidtermShell:
                             assert self.prompt_type == '1', self.prompt_type
                             ts, status, workdir = self.prompt_text.split('@', 2)
                             input_ts = datetime.datetime.strptime(ts, '%Y%m%dT%H%M%S%z')
-                            if self.output_ts is None:
-                                self.add('[{}]\n'.format(workdir))
-                            else:
+                            if self.output_ts is not None:
+                                if status == '0':
+                                    self.scope = 'markup.normal.green'
+                                else:
+                                    self.scope = 'markup.normal.red'
                                 self.add(
-                                    'status={} time={}\n[{}]\n'.format(
+                                    'status={} time={}'.format(
                                         status,
                                         input_ts - self.output_ts,
-                                        workdir
                                     )
                                 )
                                 # Reset the output timestamp to None so that pressing enter
                                 # for a blank line does not show an updated time since run
                                 self.output_ts = None
+                                self.scope = None
+                                self.add('\n')
+                            self.scope = 'markup.normal.blue'
+                            self.add('[{}]'.format(workdir))
+                            self.scope = None
+                            self.add('\n')
                         self.prompt_type = None
                     elif command == 'm':
-                        # ignore color
-                        pass
+                        arg = part[2:-1]
+                        nums = arg.split(';')
+                        if '0' in nums:
+                            self.scope = None
+                        elif '30' in nums:
+                            self.scope = 'markup.normal.black'
+                        elif '31' in nums:
+                            self.scope = 'markup.normal.red'
+                        elif '32' in nums:
+                            self.scope = 'markup.normal.green'
+                        elif '33' in nums:
+                            self.scope = 'markup.normal.yellow'
+                        elif '34' in nums:
+                            self.scope = 'markup.normal.blue'
+                        elif '35' in nums:
+                            self.scope = 'markup.normal.cyan'
+                        elif '36' in nums:
+                            self.scope = 'markup.normal.magenta'
+                        elif '37' in nums:
+                            self.scope = 'markup.normal.white'
+                        else:
+                            print('Unhandled style: {}'.format(part))
                     elif command == '@':
                         arg = part[2:-1]
                         if arg:
@@ -383,11 +412,13 @@ class GidtermCommand(sublime_plugin.TextCommand):
         view = window.new_file()
         view.set_name('[bash]')
         view.set_scratch(True)
+        view.set_syntax_file('Packages/sublime-gidterm/gidterm.sublime-syntax')
         view.set_line_endings('Unix')
         view.set_read_only(True)
-        view.run_command(
-            "set_setting", {"setting": "spell_check", "value": False}
-        )
+        settings = view.settings()
+        settings.set('is_gidterm', True)
+        settings.set('spell_check', False)
+        settings.set('color_scheme', 'Packages/sublime-gidterm/gidterm.sublime-color-scheme')
         window.focus_view(view)
         GidtermShell(view).start(cwd)
 
