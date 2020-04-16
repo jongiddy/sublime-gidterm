@@ -5,42 +5,98 @@
         {
             "name": "Black",
             "scope": "markup.normal.black",
-            "foreground": "#000"
+            "foreground": "#000",
+            "background": "#80808001"
         },
         {
             "name": "Red",
             "scope": "markup.normal.red",
             "foreground": "#de382b",
+            "background": "#80808001"
         },
         {
             "name": "Green",
             "scope": "markup.normal.green",
             "foreground": "#39b54a",
+            "background": "#80808001"
         },
         {
             "name": "Yellow",
             "scope": "markup.normal.yellow",
             "foreground": "#ffc706",
+            "background": "#80808001"
         },
         {
             "name": "Blue",
             "scope": "markup.normal.blue",
             "foreground": "#006fb8",
+            "background": "#80808001"
         },
         {
             "name": "Magenta",
             "scope": "markup.normal.magenta",
             "foreground": "#762671",
+            "background": "#80808001"
         },
         {
             "name": "Cyan",
             "scope": "markup.normal.cyan",
             "foreground": "#2cb5e9",
+            "background": "#80808001"
         },
         {
             "name": "White",
             "scope": "markup.normal.white",
             "foreground": "#ccc",
+            "background": "#80808001"
+        },
+        {
+            "name": "Bright Black",
+            "scope": "markup.bright.black",
+            "foreground": "#808080",
+            "background": "#80808001"
+        },
+        {
+            "name": "Bright Red",
+            "scope": "markup.bright.red",
+            "foreground": "#f00",
+            "background": "#80808001"
+        },
+        {
+            "name": "Bright Green",
+            "scope": "markup.bright.green",
+            "foreground": "#0f0",
+            "background": "#80808001"
+        },
+        {
+            "name": "Bright Yellow",
+            "scope": "markup.bright.yellow",
+            "foreground": "#ff0",
+            "background": "#80808001"
+        },
+        {
+            "name": "Bright Blue",
+            "scope": "markup.bright.blue",
+            "foreground": "#00f",
+            "background": "#80808001"
+        },
+        {
+            "name": "Bright Magenta",
+            "scope": "markup.bright.magenta",
+            "foreground": "#f0f",
+            "background": "#80808001"
+        },
+        {
+            "name": "Bright Cyan",
+            "scope": "markup.bright.cyan",
+            "foreground": "#0ff",
+            "background": "#80808001"
+        },
+        {
+            "name": "Bright White",
+            "scope": "markup.bright.white",
+            "foreground": "#fff",
+            "background": "#80808001"
         }
     ]
 }

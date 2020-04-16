@@ -21,7 +21,8 @@ export PROMPT_DIRTRIM=
 export PS0='\\e[0p\\D{%Y%m%dT%H%M%S%z}\\e[~'
 export PS2='\\e[2!p'
 export PS3='\\e[3!p'
-export PS4='\\e[4!p'
+# Don't replace PS4 because it gets used by Terraform without replacing
+# \\e with escape, so passes it through undetected.
 export TERM=ansi
 # Set COLUMNS to a standard size for commands run by the shell to avoid tools
 # creating wonky output, e.g. many tools display a completion percentage on the
@@ -164,7 +165,10 @@ class GidtermShell:
             if self.scope is not None:
                 regions = view.get_regions(self.scope)
                 regions.append(sublime.Region(self.insert, end))
-                view.add_regions(self.scope, regions, self.scope, flags=sublime.PERSISTENT)
+                view.add_regions(
+                    self.scope, regions, self.scope,
+                    flags=sublime.DRAW_NO_OUTLINE | sublime.PERSISTENT
+                    )
             self.insert = end
         else:
             begin = self.insert
@@ -219,7 +223,11 @@ class GidtermShell:
             return pos
 
     def selection(self):
-        s = ','.join('{}-{}'.format(region.begin(), region.end()) for region in self.view.sel())
+        s = ','.join(
+            '{}-{}'.format(
+                region.begin(), region.end()
+            ) for region in self.view.sel()
+        )
         if not s:
             s = 'no selection'
         return s
@@ -242,8 +250,6 @@ class GidtermShell:
         )
         parts = escape_pat.split(s)
         plain = False
-        if len(parts) > 1:
-            print(parts)
         for part in parts:
             # TODO: we might have a partial escape
             plain = not plain
@@ -286,59 +292,108 @@ class GidtermShell:
                             assert self.prompt_type is None, self.prompt_type
                             self.prompt_type = arg
                             self.prompt_text = ''
+                        continue
                     elif command == '~':
                         # end prompt
                         if self.prompt_type == '0':
                             ts = self.prompt_text
-                            self.output_ts = datetime.datetime.strptime(ts, '%Y%m%dT%H%M%S%z')
+                            self.output_ts = datetime.datetime.strptime(
+                                ts, '%Y%m%dT%H%M%S%z'
+                            )
                         else:
                             assert self.prompt_type == '1', self.prompt_type
-                            ts, status, workdir = self.prompt_text.split('@', 2)
-                            input_ts = datetime.datetime.strptime(ts, '%Y%m%dT%H%M%S%z')
+                            ts, status, workdir = self.prompt_text.split(
+                                '@', 2
+                            )
+                            input_ts = datetime.datetime.strptime(
+                                ts, '%Y%m%dT%H%M%S%z'
+                            )
                             if self.output_ts is not None:
+                                col = self.view.rowcol(self.view.size())[1]
+                                if col == 0:
+                                    self.scope = 'markup.normal.green'
+                                    self.add('\u23ce')
+                                else:
+                                    self.scope = 'markup.normal.red'
+                                    self.add('\n\u23ce')
                                 if status == '0':
                                     self.scope = 'markup.normal.green'
                                 else:
                                     self.scope = 'markup.normal.red'
-                                self.add(
-                                    'status={} time={}'.format(
-                                        status,
-                                        input_ts - self.output_ts,
-                                    )
-                                )
-                                # Reset the output timestamp to None so that pressing enter
-                                # for a blank line does not show an updated time since run
-                                self.output_ts = None
+                                self.add(status)
                                 self.scope = None
-                                self.add('\n')
-                            self.scope = 'markup.normal.blue'
+                                self.add(
+                                    ' {}\n'.format(input_ts - self.output_ts)
+                                )
+                                # Reset the output timestamp to None so that
+                                # pressing enter for a blank line does not show
+                                # an updated time since run
+                                self.output_ts = None
+                            self.scope = 'markup.bright.black'
                             self.add('[{}]'.format(workdir))
                             self.scope = None
                             self.add('\n')
                         self.prompt_type = None
+                        continue
                     elif command == 'm':
                         arg = part[2:-1]
                         nums = arg.split(';')
-                        if '0' in nums:
+                        if not arg or arg == '0':
                             self.scope = None
+                            continue
+                        elif arg == '1':
+                            continue
+                        elif '10' in nums and '0' in nums:
+                            self.scope = None
+                            continue
                         elif '30' in nums:
                             self.scope = 'markup.normal.black'
+                            continue
                         elif '31' in nums:
                             self.scope = 'markup.normal.red'
+                            continue
                         elif '32' in nums:
                             self.scope = 'markup.normal.green'
+                            continue
                         elif '33' in nums:
                             self.scope = 'markup.normal.yellow'
+                            continue
                         elif '34' in nums:
                             self.scope = 'markup.normal.blue'
+                            continue
                         elif '35' in nums:
                             self.scope = 'markup.normal.cyan'
+                            continue
                         elif '36' in nums:
                             self.scope = 'markup.normal.magenta'
+                            continue
                         elif '37' in nums:
                             self.scope = 'markup.normal.white'
-                        else:
-                            print('Unhandled style: {}'.format(part))
+                            continue
+                        elif '90' in nums:
+                            self.scope = 'markup.bright.black'
+                            continue
+                        elif '91' in nums:
+                            self.scope = 'markup.bright.red'
+                            continue
+                        elif '92' in nums:
+                            self.scope = 'markup.bright.green'
+                            continue
+                        elif '93' in nums:
+                            self.scope = 'markup.bright.yellow'
+                            continue
+                        elif '94' in nums:
+                            self.scope = 'markup.bright.blue'
+                            continue
+                        elif '95' in nums:
+                            self.scope = 'markup.bright.cyan'
+                            continue
+                        elif '96' in nums:
+                            self.scope = 'markup.bright.magenta'
+                            continue
+                        elif '97' in nums:
+                            self.scope = 'markup.bright.white'
+                            continue
                     elif command == '@':
                         arg = part[2:-1]
                         if arg:
@@ -352,6 +407,7 @@ class GidtermShell:
                         self.add(' ' * n)
                         self.overwrite = overwrite
                         self.insert = insert
+                        continue
                     elif command == 'C':
                         # right
                         arg = part[2:-1]
@@ -361,6 +417,7 @@ class GidtermShell:
                             n = 1
                         self.insert = min(self.insert + n, self.view.size())
                         self.move_to(self.insert)
+                        continue
                     elif command == 'D':
                         # left
                         arg = part[2:-1]
@@ -370,6 +427,7 @@ class GidtermShell:
                             n = 1
                         self.insert = max(self.insert - n, 0)
                         self.move_to(self.insert)
+                        continue
                     elif command == 'K':
                         # clear to end of line
                         self.move_to(self.insert)
@@ -377,15 +435,16 @@ class GidtermShell:
                             "move_to", {"to": "eol", "extend": True}
                         )
                         self.erase()
+                        continue
                     elif command == 'P':
                         # delete n
                         n = int(part[2:-1])
                         end = self.insert + n
                         region = sublime.Region(self.insert, end)
                         self.erase(region)
-                    else:
-                        print('gidterm: [WARN] unknown control: {!r}'.format(part))
-                        self.add(part)
+                        continue
+                    print('gidterm: [WARN] unknown control: {!r}'.format(part))
+                    self.add(part)
 
     def loop(self):
         shell = _shellmap.get(self.view.id())
@@ -418,7 +477,10 @@ class GidtermCommand(sublime_plugin.TextCommand):
         settings = view.settings()
         settings.set('is_gidterm', True)
         settings.set('spell_check', False)
-        settings.set('color_scheme', 'Packages/sublime-gidterm/gidterm.sublime-color-scheme')
+        settings.set(
+            'color_scheme',
+            'Packages/sublime-gidterm/gidterm.sublime-color-scheme'
+        )
         window.focus_view(view)
         GidtermShell(view).start(cwd)
 
