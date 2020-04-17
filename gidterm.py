@@ -4,6 +4,7 @@ import os
 import pty
 import re
 import select
+import signal
 import tempfile
 
 import sublime
@@ -34,6 +35,18 @@ export PAGER=/bin/cat
 # Don't add control commands to the history
 export HISTIGNORE=${HISTIGNORE:+${HISTIGNORE}:}'*# [@gidterm@]'
 '''
+
+_exit_status_info = {}
+
+for name in dir(signal):
+    if name.startswith('SIG') and not name.startswith('SIG_'):
+        if name in ('SIGRTMIN', 'SIGRTMAX'):
+            continue
+        try:
+            signum = int(getattr(signal, name))
+        except Exception:
+            pass
+        _exit_status_info[str(signum + 128)] = '\U0001f5f2' + name
 
 
 def gidterm_decode_error(e):
@@ -329,6 +342,10 @@ class GidtermShell:
                                 else:
                                     self.scope = 'markup.normal.red'
                                 cursor = self.write(cursor, status)
+                                info = _exit_status_info.get(status)
+                                if info:
+                                    self.scope = 'markup.normal.yellow'
+                                    cursor = self.write(cursor, info)
                                 if col == 0:
                                     self.scope = 'markup.normal.green'
                                 else:
