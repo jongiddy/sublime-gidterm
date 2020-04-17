@@ -214,6 +214,19 @@ class GidtermShell:
             self.view.show(self.cursor)
 
     def erase(self, region):
+        length = region.size()
+        if length > 0:
+            view = self.view
+            sel = view.sel()
+            sel.clear()
+            sel.add(region)
+            view.set_read_only(False)
+            try:
+                view.run_command('insert', {'characters': ' ' * length})
+            finally:
+                view.set_read_only(True)
+
+    def delete(self, region):
         if not region.empty():
             view = self.view
             sel = view.sel()
@@ -274,7 +287,6 @@ class GidtermShell:
                             forward=False,
                             classes=sublime.CLASS_LINE_START
                         )
-                        print(bol)
                         self.cursor = bol
                         self.move_cursor()
                 else:
@@ -427,21 +439,58 @@ class GidtermShell:
                         self.move_cursor()
                         continue
                     elif command == 'K':
-                        # clear to end of line
-                        eol = view.find_by_class(
-                            self.cursor,
-                            forward=True,
-                            classes=sublime.CLASS_LINE_END
-                        )
-                        print(eol)
-                        self.erase(sublime.Region(self.cursor, eol))
-                        continue
+                        arg = part[2:-1]
+                        if not arg or arg == '0':
+                            # clear to end of line
+                            eol = view.find_by_class(
+                                self.cursor,
+                                forward=True,
+                                classes=sublime.CLASS_LINE_END
+                            )
+                            self.erase(sublime.Region(self.cursor, eol))
+                            self.move_cursor()
+                            continue
+                        elif arg == '1':
+                            # clear to start of line
+                            bol = view.find_by_class(
+                                self.cursor,
+                                forward=False,
+                                classes=sublime.CLASS_LINE_START
+                            )
+                            self.erase(sublime.Region(bol, self.cursor))
+                            continue
+                        elif arg == '2':
+                            # clear line
+                            bol = view.find_by_class(
+                                self.cursor,
+                                forward=False,
+                                classes=sublime.CLASS_LINE_START
+                            )
+                            eol = view.find_by_class(
+                                self.cursor,
+                                forward=True,
+                                classes=sublime.CLASS_LINE_END
+                            )
+                            self.erase(sublime.Region(bol, eol))
+                            self.move_cursor()
+                            continue
                     elif command == 'P':
                         # delete n
                         n = int(part[2:-1])
                         end = self.cursor + n
                         region = sublime.Region(self.cursor, end)
-                        self.erase(region)
+                        self.delete(region)
+                        continue
+                    elif command in ('A', 'B', 'E', 'F', 'G', 'H', 'J', 'f'):
+                        # we don't handle other cursor movements, since we lie
+                        # about the screen width, so apps will get confused. We
+                        # ensure we are at the start of a line when we see them.
+                        pos = view.size()
+                        col = view.rowcol(pos)[1]
+                        if col != 0:
+                            pos = self.write(pos, '\n')
+                        self.cursor = pos
+                        self.move_cursor()
                         continue
                     print('gidterm: [WARN] unknown control: {!r}'.format(part))
                     self.cursor = self.write(self.cursor, part)
