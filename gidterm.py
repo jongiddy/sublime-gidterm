@@ -123,114 +123,105 @@ class GidtermShell:
 
     def __init__(self, view):
         self.view = view
-        # `insert` is the location of the input cursor. It is often the end of
+        # `cursor` is the location of the input cursor. It is often the end of
         # the doc but may be earlier if the LEFT key is used, or during
         # command history rewriting.
-        self.insert = view.size()
+        self.cursor = view.size()
         self.overwrite = True
         self.output_ts = None
         self.prompt_type = None
         self.scope = None
+        self.follow = True
+        view.settings().set('gidterm_follow', self.follow)
 
         shell = Shell()
         _shellmap[view.id()] = shell
 
-    def cursor_at_end(self):
-        size = self.view.size()
-        for region in self.view.sel():
-            if region.begin() < size:
-                return False
-        return True
-
-    def set_selection(self, regions):
-        sel = self.view.sel()
-        sel.clear()
-        sel.add_all(regions)
-
-    def move_to(self, pos):
-        sel = self.view.sel()
-        sel.clear()
-        sel.add(sublime.Region(pos, pos))
-
-    def add(self, s):
+    def insert(self, start, text):
         view = self.view
-        restore = self.position() == self.insert
-        if self.insert == view.size():
-            view.set_read_only(False)
+        if start == view.size():
             view.run_command(
-                "append", {"characters": s, "scroll_to_end": True}
+                'append',
+                {'characters': text, 'force': True, 'scroll_to_end': True}
             )
-            view.set_read_only(True)
             end = view.size()
-            if self.scope is not None:
-                regions = view.get_regions(self.scope)
-                regions.append(sublime.Region(self.insert, end))
-                view.add_regions(
-                    self.scope, regions, self.scope,
-                    flags=sublime.DRAW_NO_OUTLINE | sublime.PERSISTENT
-                    )
-            self.insert = end
         else:
-            begin = self.insert
-            end = self.insert + len(s)
-            if self.overwrite:
-                region = sublime.Region(begin, end)
-            else:
-                region = sublime.Region(begin, begin)
-            self.set_selection([region])
-            view.set_read_only(False)
-            view.run_command(
-                "insert", {"characters": s}
-            )
-            view.set_read_only(True)
-            self.insert = end
-        if restore:
-            self.move_to(self.insert)
-
-    def erase(self, region=None):
-        view = self.view
-        sel = view.sel()
-        regions = []
-        if region is None:
-            for region in view.sel():
-                if not region.empty():
-                    regions.append(region)
-        else:
-            if not region.empty():
-                regions.append(region)
-        if regions:
+            sel = view.sel()
             sel.clear()
-            sel.add_all(regions)
+            sel.add(start)
+            view.set_read_only(False)
+            try:
+                view.run_command('insert', {'characters': text})
+            finally:
+                view.set_read_only(True)
+            end = start + len(text)
+
+        if self.scope is not None:
+            regions = view.get_regions(self.scope)
+            if regions and regions[-1].end() == start:
+                prev = regions.pop()
+                region = sublime.Region(prev.begin(), end)
+            else:
+                region = sublime.Region(start, end)
+            regions.append(region)
+            view.add_regions(
+                self.scope, regions, self.scope,
+                flags=sublime.DRAW_NO_OUTLINE | sublime.PERSISTENT
+            )
+
+        return end
+
+    def write(self, start, text):
+        view = self.view
+        if start == view.size():
+            view.run_command(
+                'append',
+                {'characters': text, 'force': True, 'scroll_to_end': True}
+            )
+            end = view.size()
+        else:
+            end = start + len(text)
+            region = sublime.Region(start, end)
+            sel = view.sel()
+            sel.clear()
+            sel.add(region)
+            view.set_read_only(False)
+            try:
+                view.run_command('insert', {'characters': text})
+            finally:
+                view.set_read_only(True)
+
+        if self.scope is not None:
+            regions = view.get_regions(self.scope)
+            if regions and regions[-1].end() == start:
+                prev = regions.pop()
+                region = sublime.Region(prev.begin(), end)
+            else:
+                region = sublime.Region(start, end)
+            regions.append(region)
+            view.add_regions(
+                self.scope, regions, self.scope,
+                flags=sublime.DRAW_NO_OUTLINE | sublime.PERSISTENT
+            )
+
+        return end
+
+    def move_cursor(self):
+        if self.follow:
+            sel = self.view.sel()
+            sel.clear()
+            sel.add(self.cursor)
+            self.view.show(self.cursor)
+
+    def erase(self, region):
+        if not region.empty():
+            view = self.view
+            sel = view.sel()
+            sel.clear()
+            sel.add(region)
             view.set_read_only(False)
             view.run_command("left_delete")
             view.set_read_only(True)
-
-    def position(self):
-        pos = None
-        sel = self.view.sel()
-        for region in sel:
-            if region.empty():
-                if pos is None:
-                    pos = region.begin()
-                else:
-                    if pos != region.begin():
-                        raise RuntimeError()
-            else:
-                return None
-        if pos is None:
-            return self.view.size()
-        else:
-            return pos
-
-    def selection(self):
-        s = ','.join(
-            '{}-{}'.format(
-                region.begin(), region.end()
-            ) for region in self.view.sel()
-        )
-        if not s:
-            s = 'no selection'
-        return s
 
     def start(self, workdir):
         shell = _shellmap.get(self.view.id())
@@ -248,6 +239,7 @@ class GidtermShell:
             r'(?:\r+\n?)|'                          # CR's possibly with a NL
             r'(?:\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]))'  # CSI
         )
+        view = self.view
         parts = escape_pat.split(s)
         plain = False
         for part in parts:
@@ -258,36 +250,43 @@ class GidtermShell:
                 # internal part of a PS0 or PS1 shell prompt.
                 if part:
                     if self.prompt_type is None:
-                        self.add(part)
+                        self.cursor = self.write(self.cursor, part)
                     else:
                         self.prompt_text += part
             else:
                 if part == '\x07':
-                    self.view.set_name('[BASH]')
+                    view.set_name('[BASH]')
                     sublime.set_timeout(self.unbell, 250)
                 elif part[0] == '\x08':
                     n = len(part)
-                    if n > self.insert:
-                        n = self.insert
-                    self.insert = self.insert - n
-                    self.move_to(self.insert)
+                    if n > self.cursor:
+                        n = self.cursor
+                    self.cursor = self.cursor - n
+                    self.move_cursor()
                 elif part[0] == '\r':
                     if part[-1] == '\n':
-                        self.add('\n')
+                        self.cursor = self.write(view.size(), '\n')
+                        self.move_cursor()
                     else:
                         # move cursor to start of line
-                        self.move_to(self.insert)
-                        self.view.run_command(
-                            "move_to", {"to": "bol", "extend": False}
+                        bol = view.find_by_class(
+                            self.cursor,
+                            forward=False,
+                            classes=sublime.CLASS_LINE_START
                         )
-                        self.insert = self.position()
+                        print(bol)
+                        self.cursor = bol
+                        self.move_cursor()
                 else:
                     command = part[-1]
                     if command == 'p':
                         # prompt
                         arg = part[2:-1]
                         if arg.endswith('!'):
-                            self.add('<{}>'.format(arg))
+                            self.cursor = self.write(
+                                self.cursor, '<{}>'.format(arg)
+                            )
+                            self.move_cursor()
                         else:
                             assert self.prompt_type is None, self.prompt_type
                             self.prompt_type = arg
@@ -308,22 +307,24 @@ class GidtermShell:
                             input_ts = datetime.datetime.strptime(
                                 ts, '%Y%m%dT%H%M%S%z'
                             )
+                            cursor = view.size()
                             if self.output_ts is not None:
-                                col = self.view.rowcol(self.view.size())[1]
+                                col = view.rowcol(cursor)[1]
                                 if col != 0:
-                                    self.add('\n')
+                                    cursor = self.write(cursor, '\n')
                                 if status == '0':
                                     self.scope = 'markup.normal.green'
                                 else:
                                     self.scope = 'markup.normal.red'
-                                self.add(status)
+                                cursor = self.write(cursor, status)
                                 if col == 0:
                                     self.scope = 'markup.normal.green'
                                 else:
                                     self.scope = 'markup.normal.red'
-                                self.add('\u23ce')
+                                cursor = self.write(cursor, '\u23ce')
                                 self.scope = None
-                                self.add(
+                                cursor = self.write(
+                                    cursor,
                                     ' {}\n'.format(input_ts - self.output_ts)
                                 )
                                 # Reset the output timestamp to None so that
@@ -331,9 +332,10 @@ class GidtermShell:
                                 # an updated time since run
                                 self.output_ts = None
                             self.scope = 'markup.bright.black'
-                            self.add('[{}]'.format(workdir))
+                            cursor = self.write(cursor, '[{}]'.format(workdir))
                             self.scope = None
-                            self.add('\n')
+                            self.cursor = self.write(cursor, '\n')
+                            self.move_cursor()
                         self.prompt_type = None
                         continue
                     elif command == 'm':
@@ -401,13 +403,8 @@ class GidtermShell:
                             n = int(arg)
                         else:
                             n = 1
-                        insert = self.insert
-                        self.move_to(insert)
-                        overwrite = self.overwrite
-                        self.overwrite = False
-                        self.add(' ' * n)
-                        self.overwrite = overwrite
-                        self.insert = insert
+                        # keep cursor at start
+                        self.insert(self.cursor, ' ' * n)
                         continue
                     elif command == 'C':
                         # right
@@ -416,8 +413,8 @@ class GidtermShell:
                             n = int(arg)
                         else:
                             n = 1
-                        self.insert = min(self.insert + n, self.view.size())
-                        self.move_to(self.insert)
+                        self.cursor = min(self.cursor + n, view.size())
+                        self.move_cursor()
                         continue
                     elif command == 'D':
                         # left
@@ -426,26 +423,29 @@ class GidtermShell:
                             n = int(arg)
                         else:
                             n = 1
-                        self.insert = max(self.insert - n, 0)
-                        self.move_to(self.insert)
+                        self.cursor = max(self.cursor - n, 0)
+                        self.move_cursor()
                         continue
                     elif command == 'K':
                         # clear to end of line
-                        self.move_to(self.insert)
-                        self.view.run_command(
-                            "move_to", {"to": "eol", "extend": True}
+                        eol = view.find_by_class(
+                            self.cursor,
+                            forward=True,
+                            classes=sublime.CLASS_LINE_END
                         )
-                        self.erase()
+                        print(eol)
+                        self.erase(sublime.Region(self.cursor, eol))
                         continue
                     elif command == 'P':
                         # delete n
                         n = int(part[2:-1])
-                        end = self.insert + n
-                        region = sublime.Region(self.insert, end)
+                        end = self.cursor + n
+                        region = sublime.Region(self.cursor, end)
                         self.erase(region)
                         continue
                     print('gidterm: [WARN] unknown control: {!r}'.format(part))
-                    self.add(part)
+                    self.cursor = self.write(self.cursor, part)
+                    self.move_cursor()
 
     def loop(self):
         shell = _shellmap.get(self.view.id())
@@ -490,6 +490,7 @@ _keyin_map = {
     'backspace': '\x08',
     'enter': '\n',
     'tab': '\t',
+    'escape': '\x1b\x1b',
     'up': '\x1b[A',
     'down': '\x1b[B',
     'right': '\x1b[C',
