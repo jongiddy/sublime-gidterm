@@ -310,17 +310,18 @@ class GidtermShell:
                             )
                             if self.output_ts is not None:
                                 col = self.view.rowcol(self.view.size())[1]
-                                if col == 0:
-                                    self.scope = 'markup.normal.green'
-                                    self.add('\u23ce')
-                                else:
-                                    self.scope = 'markup.normal.red'
-                                    self.add('\n\u23ce')
+                                if col != 0:
+                                    self.add('\n')
                                 if status == '0':
                                     self.scope = 'markup.normal.green'
                                 else:
                                     self.scope = 'markup.normal.red'
                                 self.add(status)
+                                if col == 0:
+                                    self.scope = 'markup.normal.green'
+                                else:
+                                    self.scope = 'markup.normal.red'
+                                self.add('\u23ce')
                                 self.scope = None
                                 self.add(
                                     ' {}\n'.format(input_ts - self.output_ts)
