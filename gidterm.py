@@ -144,8 +144,7 @@ class GidtermShell:
         self.output_ts = None
         self.prompt_type = None
         self.scope = None
-        self.follow = True
-        view.settings().set('gidterm_follow', self.follow)
+        view.settings().set('gidterm_follow', True)
 
         shell = Shell()
         _shellmap[view.id()] = shell
@@ -219,8 +218,8 @@ class GidtermShell:
 
         return end
 
-    def move_cursor(self):
-        if self.follow:
+    def move_cursor(self, follow):
+        if follow:
             sel = self.view.sel()
             sel.clear()
             sel.add(self.cursor)
@@ -258,6 +257,13 @@ class GidtermShell:
     def unbell(self):
         self.view.set_name('[bash]')
 
+    def at_cursor(self):
+        cursor = self.cursor
+        for region in self.view.sel():
+            if region.begin() != cursor or region.end() != cursor:
+                return False
+        return True
+
     def handle_output(self, s, now):
         escape_pat = re.compile(
             r'(\x07|'                               # BEL
@@ -266,6 +272,7 @@ class GidtermShell:
             r'(?:\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]))'  # CSI
         )
         view = self.view
+        follow = view.settings().get('gidterm_follow')
         parts = escape_pat.split(s)
         plain = False
         for part in parts:
@@ -277,6 +284,7 @@ class GidtermShell:
                 if part:
                     if self.prompt_type is None:
                         self.cursor = self.write(self.cursor, part)
+                        self.move_cursor(follow)
                     else:
                         self.prompt_text += part
             else:
@@ -288,11 +296,11 @@ class GidtermShell:
                     if n > self.cursor:
                         n = self.cursor
                     self.cursor = self.cursor - n
-                    self.move_cursor()
+                    self.move_cursor(follow)
                 elif part[0] == '\r':
                     if part[-1] == '\n':
                         self.cursor = self.write(view.size(), '\n')
-                        self.move_cursor()
+                        self.move_cursor(follow)
                     else:
                         # move cursor to start of line
                         bol = view.find_by_class(
@@ -301,7 +309,7 @@ class GidtermShell:
                             classes=sublime.CLASS_LINE_START
                         )
                         self.cursor = bol
-                        self.move_cursor()
+                        self.move_cursor(follow)
                 else:
                     command = part[-1]
                     if command == 'p':
@@ -310,11 +318,12 @@ class GidtermShell:
                         if arg.endswith('!'):
                             if arg.startswith('0'):
                                 self.output_ts = now
+                                self.frozen = None
                             else:
                                 self.cursor = self.write(
                                     self.cursor, '<{}>'.format(arg)
                                 )
-                                self.move_cursor()
+                                self.move_cursor(follow)
                         else:
                             assert self.prompt_type is None, self.prompt_type
                             self.prompt_type = arg
@@ -359,7 +368,8 @@ class GidtermShell:
                         cursor = self.write(cursor, '[{}]'.format(workdir))
                         self.scope = None
                         self.cursor = self.write(cursor, '\n')
-                        self.move_cursor()
+                        self.frozen = self.cursor
+                        self.move_cursor(follow)
                         self.prompt_type = None
                         continue
                     elif command == 'm':
@@ -501,7 +511,7 @@ class GidtermShell:
                         else:
                             n = 1
                         self.cursor = min(self.cursor + n, view.size())
-                        self.move_cursor()
+                        self.move_cursor(follow)
                         continue
                     elif command == 'D':
                         # left
@@ -511,7 +521,7 @@ class GidtermShell:
                         else:
                             n = 1
                         self.cursor = max(self.cursor - n, 0)
-                        self.move_cursor()
+                        self.move_cursor(follow)
                         continue
                     elif command == 'K':
                         arg = part[2:-1]
@@ -523,7 +533,7 @@ class GidtermShell:
                                 classes=sublime.CLASS_LINE_END
                             )
                             self.erase(sublime.Region(self.cursor, eol))
-                            self.move_cursor()
+                            self.move_cursor(follow)
                             continue
                         elif arg == '1':
                             # clear to start of line
@@ -547,7 +557,7 @@ class GidtermShell:
                                 classes=sublime.CLASS_LINE_END
                             )
                             self.erase(sublime.Region(bol, eol))
-                            self.move_cursor()
+                            self.move_cursor(follow)
                             continue
                     elif command == 'P':
                         # delete n
@@ -565,11 +575,11 @@ class GidtermShell:
                         if col != 0:
                             pos = self.write(pos, '\n')
                         self.cursor = pos
-                        self.move_cursor()
+                        self.move_cursor(follow)
                         continue
                     print('gidterm: [WARN] unknown control: {!r}'.format(part))
                     self.cursor = self.write(self.cursor, part)
-                    self.move_cursor()
+                    self.move_cursor(follow)
 
     def loop(self):
         shell = _shellmap.get(self.view.id())
@@ -611,88 +621,139 @@ class GidtermCommand(sublime_plugin.TextCommand):
         GidtermShell(view).start(cwd)
 
 
-_keyin_map = {
-    'backspace': '\x08',
-    'enter': '\n',
-    'tab': '\t',
+class GidtermInputCommand(sublime_plugin.TextCommand):
+
+    def run(self, edit, key):
+        shell = _shellmap.get(self.view.id())
+        if shell:
+            self.view.settings().set('gidterm_follow', True)
+            shell.send(key)
+        else:
+            print('disconnected')
+
+
+_follow_map = {
     'escape': '\x1b\x1b',
     'up': '\x1b[A',
     'down': '\x1b[B',
     'right': '\x1b[C',
     'left': '\x1b[D',
-    'shift+ctrl+a': '\x01',
-    'shift+ctrl+A': '\x01',
-    # shift+ctrl+b - use cursor left key instead
-    'shift+ctrl+c': '\x03',
-    'shift+ctrl+C': '\x03',
-    'shift+ctrl+d': '\x04',
-    'shift+ctrl+D': '\x04',
-    'shift+ctrl+e': '\x05',
-    'shift+ctrl+E': '\x05',
-    # shift+ctrl+f - use cursor right key instead
-    'shift+ctrl+g': '\x07',
-    'shift+ctrl+G': '\x07',
-    'shift+ctrl+h': '\x08',
-    'shift+ctrl+H': '\x08',
-    'shift+ctrl+i': '\x09',
-    'shift+ctrl+I': '\x09',
-    'shift+ctrl+j': '\x10',
-    'shift+ctrl+J': '\x10',
-    'shift+ctrl+k': '\x11',
-    'shift+ctrl+K': '\x11',
-    'shift+ctrl+l': '\x12',
-    'shift+ctrl+L': '\x12',
-    'shift+ctrl+m': '\x13',
-    'shift+ctrl+M': '\x13',
-    # shift+ctrl+n - use cursor down key instead
-    'shift+ctrl+o': '\x15',
-    'shift+ctrl+O': '\x15',
-    # shift+ctrl+p - use cursor up key instead
-    'shift+ctrl+q': '\x17',
-    'shift+ctrl+Q': '\x17',
-    'shift+ctrl+r': '\x18',
-    'shift+ctrl+R': '\x18',
-    # shift+ctrl+s - no replacement
-    'shift+ctrl+t': '\x20',
-    'shift+ctrl+T': '\x20',
-    'shift+ctrl+u': '\x21',
-    'shift+ctrl+U': '\x21',
-    'shift+ctrl+v': '\x22',
-    'shift+ctrl+V': '\x22',
-    'shift+ctrl+w': '\x23',
-    'shift+ctrl+W': '\x23',
-    'shift+ctrl+x': '\x24',
-    'shift+ctrl+X': '\x24',
-    'shift+ctrl+y': '\x25',
-    'shift+ctrl+Y': '\x25',
-    'shift+ctrl+z': '\x26',
-    'shift+ctrl+Z': '\x26',
-    'shift+space': ' ',
+    'ctrl+@': '\x00',
+    'ctrl+a': '\x01',
+    'ctrl+b': '\x02',
+    'ctrl+c': '\x03',
+    'ctrl+d': '\x04',
+    'ctrl+e': '\x05',
+    'ctrl+f': '\x06',
+    'ctrl+g': '\x07',
+    'ctrl+h': '\x08',
+    'ctrl+i': '\x09',
+    'ctrl+j': '\x10',
+    'ctrl+k': '\x11',
+    'ctrl+l': '\x12',
+    'ctrl+m': '\x13',
+    'ctrl+n': '\x14',
+    'ctrl+o': '\x15',
+    'ctrl+p': '\x16',
+    'ctrl+q': '\x17',
+    'ctrl+r': '\x18',
+    'ctrl+s': '\x19',
+    'ctrl+t': '\x20',
+    'ctrl+u': '\x21',
+    'ctrl+v': '\x22',
+    'ctrl+w': '\x23',
+    'ctrl+x': '\x24',
+    'ctrl+y': '\x25',
+    'ctrl+z': '\x26',
 }
 
 
-class GidtermInputCommand(sublime_plugin.TextCommand):
+class GidtermFollowingCommand(sublime_plugin.TextCommand):
 
-    def run(self, edit, key, ctrl=False, alt=False, shift=False, super=False):
-        shell = _shellmap.get(self.view.id())
+    def run(self, edit, key):
+        view = self.view
+        shell = _shellmap.get(view.id())
         if shell:
-            s = _keyin_map.get(key, key)
-            shell.send(s)
+            s = _follow_map.get(key)
+            if s is None:
+                print('unexpected follow key: {}'.format(key))
+            else:
+                shell.send(s)
         else:
             print('disconnected')
-        return False
 
 
-class GidtermPasteCommand(sublime_plugin.TextCommand):
+_follow_escape = {
+    'home':
+        lambda view: view.run_command(
+            'move_to', {"to": "bol", "extend": False}
+        ),
+    'end': lambda view: view.run_command(
+            'move_to', {"to": "eol", "extend": False}
+        ),
+    'pagedown':
+        lambda view: view.run_command(
+            'move', {"by": "pages", "forward": True}
+        ),
+    'pageup':
+        lambda view: view.run_command(
+            'move', {"by": "pages", "forward": False}
+        ),
+    'ctrl+home': lambda view: view.run_command(
+            'move_to', {"to": "bof", "extend": False}
+        ),
+    'ctrl+end': lambda view: view.run_command(
+            'move_to', {"to": "eof", "extend": False}
+        ),
+    'ctrl+pageup': lambda view: None,
+    'ctrl+pagedown': lambda view: None,
+    'shift+home': lambda view: view.run_command(
+            'move_to', {"to": "bol", "extend": True}
+        ),
+    'shift+end': lambda view: view.run_command(
+            'move_to', {"to": "eol", "extend": True}
+        ),
+    'shift+ctrl+home': lambda view: view.run_command(
+            'move_to', {"to": "bof", "extend": True}
+        ),
+    'shift+ctrl+end': lambda view: view.run_command(
+            'move_to', {"to": "eof", "extend": True}
+        ),
+}
 
-    def run(self, edit):
-        shell = _shellmap.get(self.view.id())
-        if shell:
-            buf = sublime.get_clipboard()
-            shell.send(buf)
+
+class GidtermEscapeCommand(sublime_plugin.TextCommand):
+
+    def run(self, edit, key):
+        action = _follow_escape.get(key)
+        if action is None:
+            print('unexpected escape key: {}'.format(key))
         else:
-            print('disconnected')
-        return False
+            self.view.settings().set('gidterm_follow', False)
+            action(self.view)
+
+
+class GidtermEditingCommand(sublime_plugin.TextCommand):
+
+    def run(self, edit, key):
+        view = self.view
+        if key == 'insert':
+            view.settings().set('gidterm_follow', True)
+            end = view.size()
+            sel = view.sel()
+            sel.clear()
+            sel.add(end)
+            view.show(end)
+        elif key == 'ctrl+v':
+            shell = _shellmap.get(view.id())
+            if shell:
+                buf = sublime.get_clipboard()
+                view.settings().set('gidterm_follow', True)
+                shell.send(buf)
+            else:
+                print('disconnected')
+        else:
+            print('unexpected editing key: {}'.format(key))
 
 
 class GidtermListener(sublime_plugin.ViewEventListener):

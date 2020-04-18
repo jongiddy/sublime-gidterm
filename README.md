@@ -26,4 +26,8 @@ git pull
 `Shift-Ctrl-G` in an existing tab to open a tab with a shell.
 If the existing tab contains a file, the shell will be in the same directory.
 
-Send Control characters using `Shift-Ctrl` (e.g. `Shift-Ctrl-C` will usually terminate a running command)
+The tab starts in shell mode where control keys are sent to the terminal.
+
+Use PgUp / PgDn to move to edit mode where control keys perform Sublime commands.
+
+Use Insert or type a standard key to move back to shell mode.
