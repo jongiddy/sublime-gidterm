@@ -1,5 +1,5 @@
 import codecs
-import datetime
+from datetime import datetime, timedelta, timezone
 import os
 import pty
 import re
@@ -17,9 +17,9 @@ _shellmap = {}
 
 profile = b'''
 if [ -r ~/.profile ]; then . ~/.profile; fi
-export PROMPT_COMMAND='PS1=\\\\e[1p\\\\D{%Y%m%dT%H%M%S%z}@$?@\\\\w\\\\e[~'
+export PROMPT_COMMAND='PS1=\\\\e[1p$?@\\\\w\\\\e[~'
 export PROMPT_DIRTRIM=
-export PS0='\\e[0p\\D{%Y%m%dT%H%M%S%z}\\e[~'
+export PS0='\\e[0!p'
 export PS2='\\e[2!p'
 export PS3='\\e[3!p'
 # Don't replace PS4 because it gets used by Terraform without replacing
@@ -258,7 +258,7 @@ class GidtermShell:
     def unbell(self):
         self.view.set_name('[bash]')
 
-    def handle_output(self, s):
+    def handle_output(self, s, now):
         escape_pat = re.compile(
             r'(\x07|'                               # BEL
             r'(?:\x08+)|'                           # BACKSPACE's
@@ -308,10 +308,13 @@ class GidtermShell:
                         # prompt
                         arg = part[2:-1]
                         if arg.endswith('!'):
-                            self.cursor = self.write(
-                                self.cursor, '<{}>'.format(arg)
-                            )
-                            self.move_cursor()
+                            if arg.startswith('0'):
+                                self.output_ts = now
+                            else:
+                                self.cursor = self.write(
+                                    self.cursor, '<{}>'.format(arg)
+                                )
+                                self.move_cursor()
                         else:
                             assert self.prompt_type is None, self.prompt_type
                             self.prompt_type = arg
@@ -319,52 +322,44 @@ class GidtermShell:
                         continue
                     elif command == '~':
                         # end prompt
-                        if self.prompt_type == '0':
-                            ts = self.prompt_text
-                            self.output_ts = datetime.datetime.strptime(
-                                ts, '%Y%m%dT%H%M%S%z'
-                            )
-                        else:
-                            assert self.prompt_type == '1', self.prompt_type
-                            ts, status, workdir = self.prompt_text.split(
-                                '@', 2
-                            )
-                            input_ts = datetime.datetime.strptime(
-                                ts, '%Y%m%dT%H%M%S%z'
-                            )
-                            cursor = view.size()
-                            if self.output_ts is not None:
-                                col = view.rowcol(cursor)[1]
-                                if col != 0:
-                                    cursor = self.write(cursor, '\n')
-                                if status == '0':
-                                    self.scope = 'sgr.green-on-default'
-                                else:
-                                    self.scope = 'sgr.red-on-default'
-                                cursor = self.write(cursor, status)
-                                info = _exit_status_info.get(status)
-                                if info:
-                                    self.scope = 'sgr.yellow-on-default'
-                                    cursor = self.write(cursor, info)
-                                if col == 0:
-                                    self.scope = 'sgr.green-on-default'
-                                else:
-                                    self.scope = 'sgr.red-on-default'
-                                cursor = self.write(cursor, '\u23ce')
-                                self.scope = None
-                                cursor = self.write(
-                                    cursor,
-                                    ' {}\n'.format(input_ts - self.output_ts)
-                                )
-                                # Reset the output timestamp to None so that
-                                # pressing enter for a blank line does not show
-                                # an updated time since run
-                                self.output_ts = None
-                            self.scope = 'sgr.brightblack-on-default'
-                            cursor = self.write(cursor, '[{}]'.format(workdir))
+                        assert self.prompt_type == '1', self.prompt_type
+                        status, workdir = self.prompt_text.split(
+                            '@', 1
+                        )
+                        input_ts = now
+                        cursor = view.size()
+                        if self.output_ts is not None:
+                            col = view.rowcol(cursor)[1]
+                            if col != 0:
+                                cursor = self.write(cursor, '\n')
+                            if status == '0':
+                                self.scope = 'sgr.green-on-default'
+                            else:
+                                self.scope = 'sgr.red-on-default'
+                            cursor = self.write(cursor, status)
+                            info = _exit_status_info.get(status)
+                            if info:
+                                self.scope = 'sgr.yellow-on-default'
+                                cursor = self.write(cursor, info)
+                            if col == 0:
+                                self.scope = 'sgr.green-on-default'
+                            else:
+                                self.scope = 'sgr.red-on-default'
+                            cursor = self.write(cursor, '\u23ce')
                             self.scope = None
-                            self.cursor = self.write(cursor, '\n')
-                            self.move_cursor()
+                            runtime = (input_ts - self.output_ts)
+                            s = int(round(runtime.total_seconds()))
+                            td = timedelta(seconds=s)
+                            cursor = self.write(cursor, ' {}\n'.format(td))
+                            # Reset the output timestamp to None so that
+                            # pressing enter for a blank line does not show
+                            # an updated time since run
+                            self.output_ts = None
+                        self.scope = 'sgr.brightblack-on-default'
+                        cursor = self.write(cursor, '[{}]'.format(workdir))
+                        self.scope = None
+                        self.cursor = self.write(cursor, '\n')
+                        self.move_cursor()
                         self.prompt_type = None
                         continue
                     elif command == 'm':
@@ -580,11 +575,12 @@ class GidtermShell:
         shell = _shellmap.get(self.view.id())
         if shell:
             if not shell.ready():
-                sublime.set_timeout(self.loop, 100)
+                sublime.set_timeout(self.loop, 50)
             else:
                 s = shell.receive()
                 if s:
-                    self.handle_output(s)
+                    now = datetime.now(timezone.utc)
+                    self.handle_output(s, now)
                     sublime.set_timeout(self.loop, 1)
                 else:
                     shell.close()
