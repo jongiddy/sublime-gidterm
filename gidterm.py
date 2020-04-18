@@ -134,6 +134,17 @@ class Shell:
 
 class GidtermShell:
 
+    _escape_pat = re.compile(
+        r'(\x07|'                                       # BEL
+        r'(?:\x08+)|'                                   # BACKSPACE's
+        r'(?:\r+\n?)|'                                  # CR's with optional NL
+        r'(?:\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]))'  # CSI
+    )
+
+    _partial_pat = re.compile(
+        r'\x1b(\[[\x30-\x3f]*[\x20-\x2f]*)?$'           # CSI
+    )
+
     def __init__(self, view):
         self.view = view
         # `cursor` is the location of the input cursor. It is often the end of
@@ -144,6 +155,7 @@ class GidtermShell:
         self.output_ts = None
         self.prompt_type = None
         self.scope = None
+        self.saved = ''
         view.settings().set('gidterm_follow', True)
 
         shell = Shell()
@@ -265,22 +277,27 @@ class GidtermShell:
         return True
 
     def handle_output(self, s, now):
-        escape_pat = re.compile(
-            r'(\x07|'                               # BEL
-            r'(?:\x08+)|'                           # BACKSPACE's
-            r'(?:\r+\n?)|'                          # CR's possibly with a NL
-            r'(?:\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]))'  # CSI
-        )
         view = self.view
         follow = view.settings().get('gidterm_follow')
-        parts = escape_pat.split(s)
+        # Add any saved text from previous iteration, split text on control
+        # characters that are handled specially, then save any partial control
+        # characters at end of text.
+        s = self.saved + s
+        parts = self._escape_pat.split(s)
+        last = parts[-1]
+        match = self._partial_pat.search(last)
+        if match:
+            i = match.start()
+            parts[-1], self.saved = last[:i], last[i:]
+        else:
+            self.saved = ''
+        # Loop over alternating plain and control items
         plain = False
         for part in parts:
-            # TODO: we might have a partial escape
             plain = not plain
             if plain:
                 # If we have plaintext, it is either real plaintext or the
-                # internal part of a PS0 or PS1 shell prompt.
+                # internal part of a PS1 shell prompt.
                 if part:
                     if self.prompt_type is None:
                         self.cursor = self.write(self.cursor, part)
