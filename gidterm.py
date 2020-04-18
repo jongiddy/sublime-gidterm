@@ -17,7 +17,7 @@ _shellmap = {}
 
 profile = b'''
 if [ -r ~/.profile ]; then . ~/.profile; fi
-export PROMPT_COMMAND='PS1=\\\\e[1p$?@\\\\w\\\\e[~'
+export PROMPT_COMMAND='PS1=\\\\e[1p$?@${VIRTUAL_ENV}@\\\\w\\\\e[~'
 export PROMPT_DIRTRIM=
 export PS0='\\e[0!p'
 export PS2='\\e[2!p'
@@ -332,8 +332,8 @@ class GidtermShell:
                     elif command == '~':
                         # end prompt
                         assert self.prompt_type == '1', self.prompt_type
-                        status, workdir = self.prompt_text.split(
-                            '@', 1
+                        status, virtualenv, workdir = self.prompt_text.split(
+                            '@', 2
                         )
                         input_ts = now
                         cursor = view.size()
@@ -359,7 +359,14 @@ class GidtermShell:
                             runtime = (input_ts - self.output_ts)
                             s = int(round(runtime.total_seconds()))
                             td = timedelta(seconds=s)
-                            cursor = self.write(cursor, ' {}\n'.format(td))
+                            cursor = self.write(cursor, ' {}'.format(td))
+                            if virtualenv:
+                                self.scope = 'sgr.magenta-on-default'
+                                cursor = self.write(cursor, ' {}'.format(
+                                    os.path.basename(virtualenv)
+                                ))
+                                self.scope = None
+                            cursor = self.write(cursor, '\n')
                             # Reset the output timestamp to None so that
                             # pressing enter for a blank line does not show
                             # an updated time since run
