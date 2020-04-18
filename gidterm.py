@@ -338,18 +338,18 @@ class GidtermShell:
                                 if col != 0:
                                     cursor = self.write(cursor, '\n')
                                 if status == '0':
-                                    self.scope = 'markup.normal.green'
+                                    self.scope = 'sgr.green-on-default'
                                 else:
-                                    self.scope = 'markup.normal.red'
+                                    self.scope = 'sgr.red-on-default'
                                 cursor = self.write(cursor, status)
                                 info = _exit_status_info.get(status)
                                 if info:
-                                    self.scope = 'markup.normal.yellow'
+                                    self.scope = 'sgr.yellow-on-default'
                                     cursor = self.write(cursor, info)
                                 if col == 0:
-                                    self.scope = 'markup.normal.green'
+                                    self.scope = 'sgr.green-on-default'
                                 else:
-                                    self.scope = 'markup.normal.red'
+                                    self.scope = 'sgr.red-on-default'
                                 cursor = self.write(cursor, '\u23ce')
                                 self.scope = None
                                 cursor = self.write(
@@ -360,7 +360,7 @@ class GidtermShell:
                                 # pressing enter for a blank line does not show
                                 # an updated time since run
                                 self.output_ts = None
-                            self.scope = 'markup.bright.black'
+                            self.scope = 'sgr.brightblack-on-default'
                             cursor = self.write(cursor, '[{}]'.format(workdir))
                             self.scope = None
                             self.cursor = self.write(cursor, '\n')
@@ -369,63 +369,126 @@ class GidtermShell:
                         continue
                     elif command == 'm':
                         arg = part[2:-1]
+                        if not arg:
+                            self.scope = None
+                            continue
+                        fg = 'default'
+                        bg = 'default'
                         nums = arg.split(';')
-                        if not arg or arg == '0':
-                            self.scope = None
-                            continue
-                        elif arg == '1':
-                            continue
-                        elif '10' in nums and '0' in nums:
-                            self.scope = None
-                            continue
-                        elif '30' in nums:
-                            self.scope = 'markup.normal.black'
-                            continue
-                        elif '31' in nums:
-                            self.scope = 'markup.normal.red'
-                            continue
-                        elif '32' in nums:
-                            self.scope = 'markup.normal.green'
-                            continue
-                        elif '33' in nums:
-                            self.scope = 'markup.normal.yellow'
-                            continue
-                        elif '34' in nums:
-                            self.scope = 'markup.normal.blue'
-                            continue
-                        elif '35' in nums:
-                            self.scope = 'markup.normal.cyan'
-                            continue
-                        elif '36' in nums:
-                            self.scope = 'markup.normal.magenta'
-                            continue
-                        elif '37' in nums:
-                            self.scope = 'markup.normal.white'
-                            continue
-                        elif '90' in nums:
-                            self.scope = 'markup.bright.black'
-                            continue
-                        elif '91' in nums:
-                            self.scope = 'markup.bright.red'
-                            continue
-                        elif '92' in nums:
-                            self.scope = 'markup.bright.green'
-                            continue
-                        elif '93' in nums:
-                            self.scope = 'markup.bright.yellow'
-                            continue
-                        elif '94' in nums:
-                            self.scope = 'markup.bright.blue'
-                            continue
-                        elif '95' in nums:
-                            self.scope = 'markup.bright.cyan'
-                            continue
-                        elif '96' in nums:
-                            self.scope = 'markup.bright.magenta'
-                            continue
-                        elif '97' in nums:
-                            self.scope = 'markup.bright.white'
-                            continue
+                        i = 0
+                        while i < len(nums):
+                            num = nums[i]
+                            if num in ('0', '00'):
+                                fg = 'default'
+                                bg = 'default'
+                            elif num == '30':
+                                fg = 'black'
+                            elif num == '31':
+                                fg = 'red'
+                            elif num == '32':
+                                fg = 'green'
+                            elif num == '33':
+                                fg = 'yellow'
+                            elif num == '34':
+                                fg = 'blue'
+                            elif num == '35':
+                                fg = 'cyan'
+                            elif num == '36':
+                                fg = 'magenta'
+                            elif num == '37':
+                                fg = 'white'
+                            elif num == '38':
+                                i += 1
+                                selector = nums[i]
+                                if selector == '2':
+                                    # r, g, b
+                                    i += 3
+                                elif selector == '5':
+                                    # 8-bit
+                                    idx = int(nums[i + 1])
+                                    if idx < 8:
+                                        nums[i + 1] = str(30 + idx)
+                                    elif idx < 16:
+                                        nums[i + 1] = str(90 + idx - 8)
+                                    else:
+                                        i += 1
+                            elif num == '39':
+                                fg = 'default'
+                            elif num == '40':
+                                bg = 'black'
+                            elif num == '41':
+                                bg = 'red'
+                            elif num == '42':
+                                bg = 'green'
+                            elif num == '43':
+                                bg = 'yellow'
+                            elif num == '44':
+                                bg = 'blue'
+                            elif num == '45':
+                                bg = 'cyan'
+                            elif num == '46':
+                                bg = 'magenta'
+                            elif num == '47':
+                                bg = 'white'
+                            elif num == '48':
+                                i += 1
+                                selector = nums[i]
+                                if selector == '2':
+                                    # r, g, b
+                                    i += 3
+                                elif selector == '5':
+                                    # 8-bit
+                                    idx = int(nums[i + 1])
+                                    if idx < 8:
+                                        nums[i + 1] = str(40 + idx)
+                                    elif idx < 16:
+                                        nums[i + 1] = str(100 + idx - 8)
+                                    else:
+                                        i += 1
+                            elif num == '49':
+                                bg = 'default'
+                            elif num == '90':
+                                fg = 'brightblack'
+                            elif num == '91':
+                                fg = 'brightred'
+                            elif num == '92':
+                                fg = 'brightgreen'
+                            elif num == '93':
+                                fg = 'brightyellow'
+                            elif num == '94':
+                                fg = 'brightblue'
+                            elif num == '95':
+                                fg = 'brightcyan'
+                            elif num == '96':
+                                fg = 'brightmagenta'
+                            elif num == '97':
+                                fg = 'brightwhite'
+                            elif num == '100':
+                                bg = 'brightblack'
+                            elif num == '101':
+                                bg = 'brightred'
+                            elif num == '102':
+                                bg = 'brightgreen'
+                            elif num == '103':
+                                bg = 'brightyellow'
+                            elif num == '104':
+                                bg = 'brightblue'
+                            elif num == '105':
+                                bg = 'brightcyan'
+                            elif num == '106':
+                                bg = 'brightmagenta'
+                            elif num == '107':
+                                bg = 'brightwhite'
+                            else:
+                                print('Unhandled SGR code: {} in {}'.format(
+                                    num, part
+                                ))
+                            i += 1
+                        scope = 'sgr.{}-on-{}'.format(fg, bg)
+                        if scope == 'sgr.default-on-default':
+                            scope = None
+                        self.scope = scope
+                        continue
                     elif command == '@':
                         arg = part[2:-1]
                         if arg:
