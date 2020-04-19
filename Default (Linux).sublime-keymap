@@ -5,6 +5,10 @@
 	{"key": "setting.is_gidterm"},
 	{"key": "setting.gidterm_follow", "operator": "equal", "operand": false}
 ]},
+{"keys": ["delete"], "command": "gidterm_editing", "args": {"key": "delete"}, "context": [
+	{"key": "setting.is_gidterm"},
+	{"key": "setting.gidterm_follow", "operator": "equal", "operand": false}
+]},
 {"keys": ["ctrl+v"], "command": "gidterm_editing", "args": {"key": "ctrl+v"}, "context": [
 	{"key": "setting.is_gidterm"},
 	{"key": "setting.gidterm_follow", "operator": "equal", "operand": false}
@@ -37,6 +41,7 @@
 {"keys": ["left"], "command": "gidterm_following", "args": {"key": "left"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["right"], "command": "gidterm_following", "args": {"key": "right"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["insert"], "command": "gidterm_following", "args": {"key": "insert"}, "context": [{"key": "setting.gidterm_follow"}]},
+{"keys": ["delete"], "command": "gidterm_following", "args": {"key": "delete"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["ctrl+@"], "command": "gidterm_following", "args": {"key": "ctrl+@"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["ctrl+a"], "command": "gidterm_following", "args": {"key": "ctrl+a"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["ctrl+b"], "command": "gidterm_following", "args": {"key": "ctrl+b"}, "context": [{"key": "setting.gidterm_follow"}]},

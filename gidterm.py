@@ -291,6 +291,20 @@ class GidtermShell:
                 return False
         return True
 
+    def handle_selection_modified(self):
+        view = self.view
+        sel = view.sel()
+        input_first = self.in_start_pos
+        if input_first is None:
+            input_first = view.size()
+        sel_first = input_first
+        for region in sel:
+            sel_first = min(sel_first, region.begin())
+        if sel_first < input_first:
+            # user has clicked in the area before active command:
+            # change to browse mode
+            view.settings().set('gidterm_follow', False)
+
     def handle_output(self, s, now):
         ts = now.timestamp()
         view = self.view
@@ -422,11 +436,11 @@ class GidtermShell:
                                     os.path.basename(virtualenv)
                                 ))
                                 self.scope = None
-                            cursor = self.write(cursor, '\n')
                             # Reset the output timestamp to None so that
                             # pressing enter for a blank line does not show
                             # an updated time since run
                             self.out_start_time = None
+                        cursor = self.write(cursor, '\n')
                         self.scope = 'sgr.brightblack-on-default'
                         cursor = self.write(cursor, '[{}]'.format(workdir))
                         self.scope = None
@@ -697,6 +711,8 @@ _follow_map = {
     'down': '\x1b[B',
     'right': '\x1b[C',
     'left': '\x1b[D',
+    'insert': '\x1b[2~',
+    'delete': '\x1b[3~',
     'ctrl+@': '\x00',
     'ctrl+a': '\x01',
     'ctrl+b': '\x02',
@@ -808,6 +824,11 @@ class GidtermEditingCommand(sublime_plugin.TextCommand):
                     buf = '\b' * (view.size() - shell.in_start_pos) + buf
                 view.settings().set('gidterm_follow', True)
                 shell.send(buf)
+            elif key == 'delete':
+                if shell.in_start_pos is not None:
+                    buf = '\b' * (view.size() - shell.in_start_pos)
+                view.settings().set('gidterm_follow', True)
+                shell.send(buf)
             elif key == 'ctrl+v':
                 buf = sublime.get_clipboard()
                 view.settings().set('gidterm_follow', True)
@@ -881,4 +902,12 @@ class GidtermListener(sublime_plugin.ViewEventListener):
         return False
 
     def on_close(self):
-        del _shellmap[self.view.id()]
+        view_id = self.view.id()
+        shell = _shellmap.get(view_id)
+        if shell:
+            del _shellmap[view_id]
+
+    def on_selection_modified(self):
+        shell = _shellmap.get(self.view.id())
+        if shell:
+            shell.handle_selection_modified()

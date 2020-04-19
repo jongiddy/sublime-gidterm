@@ -31,11 +31,12 @@ The shell tab has two modes:
 - *terminal mode* where control keys are sent to the terminal. The cursor up key will show command history and `Ctrl-C` will send a signal that will likely terminate the running command.
 - *browse mode* where control keys perform Sublime commands. The cursor up key will move the cursor up one line and `Ctrl-C` will copy the current selection.
 
-In terminal mode, the following keys will change to browse mode: `Home`, `End`, `PageUp`, `PageDown`.
+In terminal mode, the following keys will change to browse mode: `Home`, `End`, `PageUp`, `PageDown`, including with the `Shift` and `Ctrl` modifiers.
+Pointer clicks above the active command line will also change to browse mode. 
 
 `Shift-Ctrl-PageUp` and `Shift-Ctrl-PageDown` will change to browse mode and select the previous or next command respectively.
 
 In browse mode, typing any printing character will change to terminal mode.
 Pasting using `Ctrl-V` will also change to terminal mode.
+`Delete` will change to terminal mode and delete the active command.
 `Insert` will change to terminal mode and replace the active command with the selected text.
-
