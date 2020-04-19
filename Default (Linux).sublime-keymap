@@ -9,6 +9,14 @@
 	{"key": "setting.is_gidterm"},
 	{"key": "setting.gidterm_follow", "operator": "equal", "operand": false}
 ]},
+{"keys": ["shift+ctrl+pageup"], "command": "gidterm_move_to", "args": {"forward": false}, "context": [
+	{"key": "setting.is_gidterm"},
+	{"key": "setting.gidterm_follow", "operator": "equal", "operand": false}
+]},
+{"keys": ["shift+ctrl+pagedown"], "command": "gidterm_move_to", "args": {"forward": true}, "context": [
+	{"key": "setting.is_gidterm"},
+	{"key": "setting.gidterm_follow", "operator": "equal", "operand": false}
+]},
 
 {"keys": ["home"], "command": "gidterm_escape", "args": {"key": "home"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["end"], "command": "gidterm_escape", "args": {"key": "end"}, "context": [{"key": "setting.gidterm_follow"}]},
@@ -16,12 +24,12 @@
 {"keys": ["pagedown"], "command": "gidterm_escape", "args": {"key": "pagedown"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["ctrl+home"], "command": "gidterm_escape", "args": {"key": "ctrl+home"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["ctrl+end"], "command": "gidterm_escape", "args": {"key": "ctrl+end"}, "context": [{"key": "setting.gidterm_follow"}]},
-{"keys": ["ctrl+pageup"], "command": "gidterm_escape", "args": {"key": "ctrl+pageup"}, "context": [{"key": "setting.gidterm_follow"}]},
-{"keys": ["ctrl+pagedown"], "command": "gidterm_escape", "args": {"key": "ctrl+pagedown"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["shift+home"], "command": "gidterm_escape", "args": {"key": "shift+home"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["shift+end"], "command": "gidterm_escape", "args": {"key": "shift+end"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["shift+ctrl+home"], "command": "gidterm_escape", "args": {"key": "shift+ctrl+home"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["shift+ctrl+end"], "command": "gidterm_escape", "args": {"key": "shift+ctrl+end"}, "context": [{"key": "setting.gidterm_follow"}]},
+{"keys": ["shift+ctrl+pageup"], "command": "gidterm_escape", "args": {"key": "shift+ctrl+pageup"}, "context": [{"key": "setting.gidterm_follow"}]},
+{"keys": ["shift+ctrl+pagedown"], "command": "gidterm_escape", "args": {"key": "shift+ctrl+pagedown"}, "context": [{"key": "setting.gidterm_follow"}]},
 
 {"keys": ["escape"], "command": "gidterm_following", "args": {"key": "escape"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["up"], "command": "gidterm_following", "args": {"key": "up"}, "context": [{"key": "setting.gidterm_follow"}]},

@@ -17,7 +17,7 @@ _shellmap = {}
 
 profile = b'''
 if [ -r ~/.profile ]; then . ~/.profile; fi
-export PROMPT_COMMAND='PS1=\\\\e[1p$?@${VIRTUAL_ENV}@\\\\w\\\\e[~'
+export PROMPT_COMMAND='PS1=\\\\[\\\\e[1p$?@${VIRTUAL_ENV}@\\\\w\\\\e[~\\\\]'
 export PROMPT_DIRTRIM=
 export PS0='\\e[0!p'
 export PS2='\\e[2!p'
@@ -129,7 +129,7 @@ class Shell:
         return fd in rfds
 
     def receive(self):
-        return self.decoder.decode(os.read(self.fd, 8192))
+        return self.decoder.decode(os.read(self.fd, 4096))
 
 
 class GidtermShell:
@@ -152,11 +152,12 @@ class GidtermShell:
         # command history rewriting.
         self.cursor = view.size()
         self.overwrite = True
-        self.output_ts = None
+        self.out_start_time = None
         self.prompt_type = None
         self.scope = None
         self.saved = ''
         view.settings().set('gidterm_follow', True)
+        view.settings().set('gidterm_history', [])
 
         shell = Shell()
         _shellmap[view.id()] = shell
@@ -277,8 +278,10 @@ class GidtermShell:
         return True
 
     def handle_output(self, s, now):
+        ts = now.timestamp()
         view = self.view
-        follow = view.settings().get('gidterm_follow')
+        settings = view.settings()
+        follow = settings.get('gidterm_follow')
         # Add any saved text from previous iteration, split text on control
         # characters that are handled specially, then save any partial control
         # characters at end of text.
@@ -293,6 +296,8 @@ class GidtermShell:
             self.saved = ''
         # Loop over alternating plain and control items
         plain = False
+        if self.out_start_time:
+            out_start_pos = self.cursor
         for part in parts:
             plain = not plain
             if plain:
@@ -334,8 +339,22 @@ class GidtermShell:
                         arg = part[2:-1]
                         if arg.endswith('!'):
                             if arg.startswith('0'):
-                                self.output_ts = now
-                                self.frozen = None
+                                # trim trailing spaces from input command
+                                end = view.size() - 1
+                                assert view.substr(end) == '\n'
+                                in_end_pos = end
+                                while view.substr(in_end_pos - 1) == ' ':
+                                    in_end_pos -= 1
+                                self.delete(sublime.Region(in_end_pos, end))
+                                # update history
+                                history = settings.get('gidterm_history')
+                                history.append(
+                                    (self.in_start_pos, in_end_pos, 1, ts)
+                                )
+                                settings.set('gidterm_history', history)
+                                self.in_start_pos = None
+                                self.out_start_time = now
+                                self.cursor = out_start_pos = view.size()
                             else:
                                 self.cursor = self.write(
                                     self.cursor, '<{}>'.format(arg)
@@ -354,7 +373,13 @@ class GidtermShell:
                         )
                         input_ts = now
                         cursor = view.size()
-                        if self.output_ts is not None:
+                        if self.out_start_time is not None:
+                            # currently displaying output
+                            if out_start_pos and cursor > out_start_pos:
+                                history = settings.get('gidterm_history')
+                                history.append((out_start_pos, cursor, 0, ts))
+                                settings.set('gidterm_history', history)
+                                out_start_pos = None
                             col = view.rowcol(cursor)[1]
                             if col != 0:
                                 cursor = self.write(cursor, '\n')
@@ -373,7 +398,7 @@ class GidtermShell:
                                 self.scope = 'sgr.red-on-default'
                             cursor = self.write(cursor, '\u23ce')
                             self.scope = None
-                            runtime = (input_ts - self.output_ts)
+                            runtime = (input_ts - self.out_start_time)
                             s = int(round(runtime.total_seconds()))
                             td = timedelta(seconds=s)
                             cursor = self.write(cursor, ' {}'.format(td))
@@ -387,12 +412,12 @@ class GidtermShell:
                             # Reset the output timestamp to None so that
                             # pressing enter for a blank line does not show
                             # an updated time since run
-                            self.output_ts = None
+                            self.out_start_time = None
                         self.scope = 'sgr.brightblack-on-default'
                         cursor = self.write(cursor, '[{}]'.format(workdir))
                         self.scope = None
                         self.cursor = self.write(cursor, '\n')
-                        self.frozen = self.cursor
+                        self.in_start_pos = self.cursor
                         self.move_cursor(follow)
                         self.prompt_type = None
                         continue
@@ -604,6 +629,13 @@ class GidtermShell:
                     print('gidterm: [WARN] unknown control: {!r}'.format(part))
                     self.cursor = self.write(self.cursor, part)
                     self.move_cursor(follow)
+        if self.out_start_time:
+            # currently displaying output
+            output_stop_pos = self.cursor
+            if output_stop_pos > out_start_pos:
+                history = settings.get('gidterm_history')
+                history.append((out_start_pos, output_stop_pos, 0, ts))
+                settings.set('gidterm_history', history)
 
     def loop(self):
         shell = _shellmap.get(self.view.id())
@@ -729,8 +761,6 @@ _follow_escape = {
     'ctrl+end': lambda view: view.run_command(
             'move_to', {"to": "eof", "extend": False}
         ),
-    'ctrl+pageup': lambda view: None,
-    'ctrl+pagedown': lambda view: None,
     'shift+home': lambda view: view.run_command(
             'move_to', {"to": "bol", "extend": True}
         ),
@@ -742,6 +772,12 @@ _follow_escape = {
         ),
     'shift+ctrl+end': lambda view: view.run_command(
             'move_to', {"to": "eof", "extend": True}
+        ),
+    'shift+ctrl+pageup': lambda view: view.run_command(
+            'gidterm_move_to', {"forward": False}
+        ),
+    'shift+ctrl+pagedown': lambda view: view.run_command(
+            'gidterm_move_to', {"forward": True}
         ),
 }
 
@@ -778,6 +814,56 @@ class GidtermEditingCommand(sublime_plugin.TextCommand):
                 print('disconnected')
         else:
             print('unexpected editing key: {}'.format(key))
+
+
+class GidtermMoveToCommand(sublime_plugin.TextCommand):
+
+    def run(self, edit, forward):
+        view = self.view
+        settings = view.settings()
+        sel = view.sel()
+        history = settings.get('gidterm_history')
+        if forward is True:
+            pos = sel[0].end()
+            size = len(history)
+            index = size // 2
+            while history and history[index][0] < pos:
+                history = history[index + 1:]
+                size = len(history)
+                index = size // 2
+
+            for entry in history:
+                if entry[0] > pos and entry[2] == 1:
+                    sel = view.sel()
+                    sel.clear()
+                    region = sublime.Region(entry[0], entry[1])
+                    sel.add(region)
+                    view.show(region)
+                    return
+            # Set to current command
+            settings.set('gidterm_follow', True)
+            end = view.size()
+            sel = view.sel()
+            sel.clear()
+            sel.add(end)
+            view.show(end)
+        else:
+            pos = sel[0].begin()
+            size = len(history)
+            index = size // 2
+            while history and history[index][1] > pos:
+                history = history[:index]
+                size = len(history)
+                index = size // 2
+
+            for entry in reversed(history):
+                if entry[1] < pos and entry[2] == 1:
+                    sel = view.sel()
+                    sel.clear()
+                    region = sublime.Region(entry[0], entry[1])
+                    sel.add(region)
+                    view.show(region)
+                    return
 
 
 class GidtermListener(sublime_plugin.ViewEventListener):

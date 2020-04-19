@@ -1,5 +1,8 @@
 {
     "name": "GidTerm Color Scheme",
+    "globals": {
+        "selection": "#33cc3380"
+    },
     "rules":
     [
         { "scope": "sgr.black-on-default", "foreground": "#000", "background": "#80808001" },

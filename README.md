@@ -1,6 +1,6 @@
 # Sublime GidTerm
 
-Terminal that runs inside SublimeText. Very much alpha quality. Linux only.
+Terminal that runs inside SublimeText. Alpha quality. Linux only.
 
 ## Install
 
@@ -23,11 +23,16 @@ git pull
 
 ## Use
 
-`Shift-Ctrl-G` in an existing tab to open a tab with a shell.
+`Shift-Ctrl-G` in an existing tab to open a bash shell.
 If the existing tab contains a file, the shell will be in the same directory.
 
-The tab starts in shell mode where control keys are sent to the terminal.
+The shell tab has two modes:
 
-Use PgUp / PgDn to move to edit mode where control keys perform Sublime commands.
+- *terminal mode* where control keys are sent to the terminal. The cursor up key will show command history and `Ctrl-C` will send a signal that will likely terminate the running command.
+- *browse mode* where control keys perform Sublime commands. The cursor up key will move the cursor up one line and `Ctrl-C` will copy the current selection.
 
-Use Insert or type a standard key to move back to shell mode.
+In terminal mode, the following keys will change to browse mode: `Home`, `End`, `PgUp`, `PgDown`.
+
+In browse mode, the `Insert` key or typing any input character will change to terminal mode.
+
+`Shift-Ctrl-PgUp` and `Shift-Ctrl-PgDown` will move between commands.
