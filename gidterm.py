@@ -145,8 +145,24 @@ class GidtermShell:
         r'\x1b(\[[\x30-\x3f]*[\x20-\x2f]*)?$'           # CSI
     )
 
-    def __init__(self, view):
+    def __init__(self, view, workdir):
         self.view = view
+        settings = view.settings()
+        view.set_name('[bash]')
+        view.set_scratch(True)
+        view.set_syntax_file('Packages/sublime-gidterm/gidterm.sublime-syntax')
+        view.set_line_endings('Unix')
+        view.set_read_only(True)
+        settings = view.settings()
+        settings.set('is_gidterm', True)
+        settings.set('spell_check', False)
+        settings.set(
+            'color_scheme',
+            'Packages/sublime-gidterm/gidterm.sublime-color-scheme'
+        )
+        settings.set('gidterm_follow', True)
+        settings.set('gidterm_history', [])
+
         # `cursor` is the location of the input cursor. It is often the end of
         # the doc but may be earlier if the LEFT key is used, or during
         # command history rewriting.
@@ -156,11 +172,15 @@ class GidtermShell:
         self.prompt_type = None
         self.scope = None
         self.saved = ''
-        view.settings().set('gidterm_follow', True)
-        view.settings().set('gidterm_history', [])
 
-        shell = Shell()
-        _shellmap[view.id()] = shell
+        _shellmap[view.id()] = self
+
+        self.shell = Shell()
+        self.shell.fork(workdir)
+        sublime.set_timeout(self.loop, 100)
+
+    def send(self, s):
+        self.shell.send(s)
 
     def insert(self, start, text):
         view = self.view
@@ -260,12 +280,6 @@ class GidtermShell:
             view.set_read_only(False)
             view.run_command("left_delete")
             view.set_read_only(True)
-
-    def start(self, workdir):
-        shell = _shellmap.get(self.view.id())
-        if shell:
-            shell.fork(workdir)
-            sublime.set_timeout(self.loop, 100)
 
     def unbell(self):
         self.view.set_name('[bash]')
@@ -638,18 +652,19 @@ class GidtermShell:
                 settings.set('gidterm_history', history)
 
     def loop(self):
-        shell = _shellmap.get(self.view.id())
-        if shell:
-            if not shell.ready():
+        if _shellmap.get(self.view.id()) == self:
+            if not self.shell.ready():
                 sublime.set_timeout(self.loop, 50)
             else:
-                s = shell.receive()
+                s = self.shell.receive()
                 if s:
                     now = datetime.now(timezone.utc)
                     self.handle_output(s, now)
                     sublime.set_timeout(self.loop, 1)
                 else:
-                    shell.close()
+                    self.shell.close()
+        else:
+            self.shell.close()
 
 
 class GidtermCommand(sublime_plugin.TextCommand):
@@ -661,20 +676,8 @@ class GidtermCommand(sublime_plugin.TextCommand):
             cwd = os.path.dirname(filename)
         window = self.view.window()
         view = window.new_file()
-        view.set_name('[bash]')
-        view.set_scratch(True)
-        view.set_syntax_file('Packages/sublime-gidterm/gidterm.sublime-syntax')
-        view.set_line_endings('Unix')
-        view.set_read_only(True)
-        settings = view.settings()
-        settings.set('is_gidterm', True)
-        settings.set('spell_check', False)
-        settings.set(
-            'color_scheme',
-            'Packages/sublime-gidterm/gidterm.sublime-color-scheme'
-        )
         window.focus_view(view)
-        GidtermShell(view).start(cwd)
+        GidtermShell(view, cwd)
 
 
 class GidtermInputCommand(sublime_plugin.TextCommand):
@@ -797,23 +800,22 @@ class GidtermEditingCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, key):
         view = self.view
-        if key == 'insert':
-            view.settings().set('gidterm_follow', True)
-            end = view.size()
-            sel = view.sel()
-            sel.clear()
-            sel.add(end)
-            view.show(end)
-        elif key == 'ctrl+v':
-            shell = _shellmap.get(view.id())
-            if shell:
+        shell = _shellmap.get(view.id())
+        if shell:
+            if key == 'insert':
+                buf = view.substr(view.sel()[0])
+                if shell.in_start_pos is not None:
+                    buf = '\b' * (view.size() - shell.in_start_pos) + buf
+                view.settings().set('gidterm_follow', True)
+                shell.send(buf)
+            elif key == 'ctrl+v':
                 buf = sublime.get_clipboard()
                 view.settings().set('gidterm_follow', True)
                 shell.send(buf)
             else:
-                print('disconnected')
+                print('unexpected editing key: {}'.format(key))
         else:
-            print('unexpected editing key: {}'.format(key))
+            print('disconnected')
 
 
 class GidtermMoveToCommand(sublime_plugin.TextCommand):
