@@ -300,9 +300,7 @@ class GidtermShell:
     def handle_selection_modified(self):
         view = self.view
         sel = view.sel()
-        input_first = self.start_pos
-        if input_first is None:
-            input_first = view.size()
+        input_first = min(self.start_pos, self.cursor)
         sel_first = input_first
         for region in sel:
             sel_first = min(sel_first, region.begin())
@@ -407,6 +405,7 @@ class GidtermShell:
                     settings.set('gidterm_history', history)
                     self.in_lines = None
                     self.cursor = self.start_pos = view.size()
+                    self.move_cursor()
                     self.out_start_time = now
                     return
                 elif prompt_type == '2':
