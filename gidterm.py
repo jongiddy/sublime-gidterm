@@ -358,13 +358,15 @@ class GidtermShell:
                         self.move_cursor(follow)
                     else:
                         # move cursor to start of line
-                        bol = view.find_by_class(
-                            self.cursor,
-                            forward=False,
-                            classes=sublime.CLASS_LINE_START
-                        )
-                        self.cursor = bol
-                        self.move_cursor(follow)
+                        classification = view.classify(self.cursor)
+                        if not classification & sublime.CLASS_LINE_START:
+                            bol = view.find_by_class(
+                                self.cursor,
+                                forward=False,
+                                classes=sublime.CLASS_LINE_START
+                            )
+                            self.cursor = bol
+                            self.move_cursor(follow)
                 else:
                     command = part[-1]
                     if command == 'p':
@@ -627,35 +629,46 @@ class GidtermShell:
                         arg = part[2:-1]
                         if not arg or arg == '0':
                             # clear to end of line
-                            eol = view.find_by_class(
-                                self.cursor,
-                                forward=True,
-                                classes=sublime.CLASS_LINE_END
-                            )
-                            self.erase(sublime.Region(self.cursor, eol))
-                            self.move_cursor(follow)
+                            classification = view.classify(self.cursor)
+                            if not classification & sublime.CLASS_LINE_END:
+                                eol = view.find_by_class(
+                                    self.cursor,
+                                    forward=True,
+                                    classes=sublime.CLASS_LINE_END
+                                )
+                                self.erase(sublime.Region(self.cursor, eol))
+                                self.move_cursor(follow)
                             continue
                         elif arg == '1':
                             # clear to start of line
-                            bol = view.find_by_class(
-                                self.cursor,
-                                forward=False,
-                                classes=sublime.CLASS_LINE_START
-                            )
-                            self.erase(sublime.Region(bol, self.cursor))
+                            classification = view.classify(self.cursor)
+                            if not classification & sublime.CLASS_LINE_START:
+                                bol = view.find_by_class(
+                                    self.cursor,
+                                    forward=False,
+                                    classes=sublime.CLASS_LINE_START
+                                )
+                                self.erase(sublime.Region(bol, self.cursor))
                             continue
                         elif arg == '2':
                             # clear line
-                            bol = view.find_by_class(
-                                self.cursor,
-                                forward=False,
-                                classes=sublime.CLASS_LINE_START
-                            )
-                            eol = view.find_by_class(
-                                self.cursor,
-                                forward=True,
-                                classes=sublime.CLASS_LINE_END
-                            )
+                            classification = view.classify(self.cursor)
+                            if classification & sublime.CLASS_LINE_START:
+                                bol = self.cursor
+                            else:
+                                bol = view.find_by_class(
+                                    self.cursor,
+                                    forward=False,
+                                    classes=sublime.CLASS_LINE_START
+                                )
+                            if classification & sublime.CLASS_LINE_END:
+                                eol = self.cursor
+                            else:
+                                eol = view.find_by_class(
+                                    self.cursor,
+                                    forward=True,
+                                    classes=sublime.CLASS_LINE_END
+                                )
                             self.erase(sublime.Region(bol, eol))
                             self.move_cursor(follow)
                             continue
