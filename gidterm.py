@@ -840,15 +840,18 @@ class GidtermEditingCommand(sublime_plugin.TextCommand):
                 if shell.in_start_pos is not None:
                     buf = '\b' * (view.size() - shell.in_start_pos) + buf
                 view.settings().set('gidterm_follow', True)
+                shell.move_cursor(True)
                 shell.send(buf)
             elif key == 'delete':
                 if shell.in_start_pos is not None:
                     buf = '\b' * (view.size() - shell.in_start_pos)
                 view.settings().set('gidterm_follow', True)
+                shell.move_cursor(True)
                 shell.send(buf)
             elif key == 'ctrl+v':
                 buf = sublime.get_clipboard()
                 view.settings().set('gidterm_follow', True)
+                shell.move_cursor(True)
                 shell.send(buf)
             else:
                 print('unexpected editing key: {}'.format(key))
