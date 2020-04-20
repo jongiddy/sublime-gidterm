@@ -22,11 +22,13 @@ export PROMPT_DIRTRIM=
 export PS0='\e[0!p'
 export PS2='\e[2!p'
 export TERM=ansi
-# Set COLUMNS to a standard size for commands run by the shell to avoid tools
-# creating wonky output, e.g. many tools display a completion percentage on the
-# right side of the screen
+# Set LINES and COLUMNS to a standard size for commands run by the shell to
+# avoid tools creating wonky output, e.g. many tools display a completion
+# percentage on the right side of the screen.  man pages are formatted to fit
+# the width COLUMNS.
 shopt -u checkwinsize
 export COLUMNS=80
+export LINES=24
 # Avoid paging by using cat as the default pager
 export PAGER=/bin/cat
 # Don't add control commands to the history
@@ -105,7 +107,11 @@ class Shell:
             # allows the shell to use UP control characters to edit lines
             # during command history navigation. Setting COLUMNS to a very
             # large value avoids these behaviours.
+            #
+            # When displaying command completion lists, bash pages them based
+            # on the LINES variable. A large LINES value avoids paging.
             'COLUMNS': '32767',
+            'LINES': '32767',
             'TERM': 'ansi',
         })
         self.pid, self.fd = pty.fork()
