@@ -170,13 +170,12 @@ class GidtermShell:
         # the doc but may be earlier if the LEFT key is used, or during
         # command history rewriting.
         self.cursor = view.size()
-        self.overwrite = True
+        self.start_pos = self.cursor
+        self.in_lines = None
         self.out_start_time = None
         self.prompt_type = None
         self.scope = None
         self.saved = ''
-        self.in_start_pos = None
-        self.in_lines = None
 
         _shellmap[view.id()] = self
 
@@ -256,12 +255,14 @@ class GidtermShell:
 
         return end
 
-    def move_cursor(self, follow):
+    def move_cursor(self):
+        view = self.view
+        follow = view.settings().get('gidterm_follow')
         if follow:
-            sel = self.view.sel()
+            sel = view.sel()
             sel.clear()
             sel.add(self.cursor)
-            self.view.show(self.cursor)
+            view.show(self.cursor)
 
     def erase(self, region):
         length = region.size()
@@ -299,7 +300,7 @@ class GidtermShell:
     def handle_selection_modified(self):
         view = self.view
         sel = view.sel()
-        input_first = self.in_start_pos
+        input_first = self.start_pos
         if input_first is None:
             input_first = view.size()
         sel_first = input_first
@@ -311,10 +312,6 @@ class GidtermShell:
             view.settings().set('gidterm_follow', False)
 
     def handle_output(self, s, now):
-        ts = now.timestamp()
-        view = self.view
-        settings = view.settings()
-        follow = settings.get('gidterm_follow')
         # Add any saved text from previous iteration, split text on control
         # characters that are handled specially, then save any partial control
         # characters at end of text.
@@ -329,8 +326,6 @@ class GidtermShell:
             self.saved = ''
         # Loop over alternating plain and control items
         plain = False
-        if self.out_start_time:
-            out_start_pos = self.cursor
         for part in parts:
             plain = not plain
             if plain:
@@ -339,367 +334,370 @@ class GidtermShell:
                 if part:
                     if self.prompt_type is None:
                         self.cursor = self.write(self.cursor, part)
-                        self.move_cursor(follow)
+                        self.move_cursor()
                     else:
                         self.prompt_text += part
             else:
-                if part == '\x07':
-                    view.set_name('[BASH]')
-                    sublime.set_timeout(self.unbell, 250)
-                elif part[0] == '\x08':
-                    n = len(part)
-                    if n > self.cursor:
-                        n = self.cursor
-                    self.cursor = self.cursor - n
-                    self.move_cursor(follow)
-                elif part[0] == '\r':
-                    if part[-1] == '\n':
-                        self.cursor = self.write(view.size(), '\n')
-                        self.move_cursor(follow)
-                    else:
-                        # move cursor to start of line
-                        classification = view.classify(self.cursor)
-                        if not classification & sublime.CLASS_LINE_START:
-                            bol = view.find_by_class(
-                                self.cursor,
-                                forward=False,
-                                classes=sublime.CLASS_LINE_START
-                            )
-                            self.cursor = bol
-                            self.move_cursor(follow)
-                else:
-                    command = part[-1]
-                    if command == 'p':
-                        # prompt
-                        arg = part[2:-1]
-                        if arg.endswith('!'):
-                            prompt_type = arg[0]
-                            if prompt_type == '0':
-                                # trim trailing spaces from input command
-                                end = view.size() - 1
-                                assert view.substr(end) == '\n'
-                                in_end_pos = end
-                                while view.substr(in_end_pos - 1) == ' ':
-                                    in_end_pos -= 1
-                                self.delete(sublime.Region(in_end_pos, end))
-                                # update history
-                                self.in_lines.append(
-                                    (self.in_start_pos, in_end_pos)
-                                )
-                                history = settings.get('gidterm_history')
-                                history.append(
-                                    (1, self.in_lines, ts)
-                                )
-                                settings.set('gidterm_history', history)
-                                self.in_start_pos = None
-                                self.in_lines = None
-                                self.out_start_time = now
-                                self.cursor = out_start_pos = view.size()
-                            elif prompt_type == '2':
-                                self.in_lines.append(
-                                    (self.in_start_pos, self.cursor)
-                                )
-                                self.scope = 'sgr.magenta-on-default'
-                                self.cursor = self.write(self.cursor, '> ')
-                                self.scope = None
-                                self.in_start_pos = self.cursor
-                                self.move_cursor(follow)
-                            else:
-                                print(
-                                    'gidterm: [WARN] unknown control:'
-                                    ' {!r}'.format(part)
-                                )
-                        else:
-                            assert self.prompt_type is None, self.prompt_type
-                            self.prompt_type = arg
-                            self.prompt_text = ''
-                        continue
-                    elif command == '~':
-                        # end prompt
-                        assert self.prompt_type == '1', self.prompt_type
-                        ps1, status, virtualenv, pwd = self.prompt_text.split(
-                            '@', 3
-                        )
-                        input_ts = now
-                        cursor = view.size()
-                        if self.out_start_time is not None:
-                            # currently displaying output
-                            if out_start_pos and cursor > out_start_pos:
-                                history = settings.get('gidterm_history')
-                                history.append(
-                                    (0, [(out_start_pos, cursor)], ts)
-                                )
-                                settings.set('gidterm_history', history)
-                                out_start_pos = None
-                            col = view.rowcol(cursor)[1]
-                            if col != 0:
-                                cursor = self.write(cursor, '\n')
-                            if status == '0':
-                                self.scope = 'sgr.green-on-default'
-                            else:
-                                self.scope = 'sgr.red-on-default'
-                            cursor = self.write(cursor, status)
-                            info = _exit_status_info.get(status)
-                            if info:
-                                self.scope = 'sgr.yellow-on-default'
-                                cursor = self.write(cursor, info)
-                            if col == 0:
-                                self.scope = 'sgr.green-on-default'
-                            else:
-                                self.scope = 'sgr.red-on-default'
-                            cursor = self.write(cursor, '\u23ce')
-                            self.scope = None
-                            runtime = (input_ts - self.out_start_time)
-                            s = int(round(runtime.total_seconds()))
-                            td = timedelta(seconds=s)
-                            cursor = self.write(cursor, ' {}'.format(td))
-                            if virtualenv:
-                                self.scope = 'sgr.magenta-on-default'
-                                cursor = self.write(cursor, ' {}'.format(
-                                    os.path.basename(virtualenv)
-                                ))
-                                self.scope = None
-                            # Reset the output timestamp to None so that
-                            # pressing enter for a blank line does not show
-                            # an updated time since run
-                            self.out_start_time = None
-                        cursor = self.write(cursor, '\n')
-                        self.scope = 'sgr.brightblack-on-default'
-                        cursor = self.write(cursor, '[{}]'.format(pwd))
-                        self.scope = 'sgr.magenta-on-default'
-                        self.cursor = self.write(cursor, '\n{} '.format(ps1))
-                        self.scope = None
-                        self.in_start_pos = self.cursor
-                        self.in_lines = []
-                        self.move_cursor(follow)
-                        self.prompt_type = None
-                        continue
-                    elif command == 'm':
-                        arg = part[2:-1]
-                        if not arg:
-                            self.scope = None
-                            continue
-                        fg = 'default'
-                        bg = 'default'
-                        nums = arg.split(';')
-                        i = 0
-                        while i < len(nums):
-                            num = nums[i]
-                            if num in ('0', '00'):
-                                fg = 'default'
-                                bg = 'default'
-                            elif num == '30':
-                                fg = 'black'
-                            elif num == '31':
-                                fg = 'red'
-                            elif num == '32':
-                                fg = 'green'
-                            elif num == '33':
-                                fg = 'yellow'
-                            elif num == '34':
-                                fg = 'blue'
-                            elif num == '35':
-                                fg = 'cyan'
-                            elif num == '36':
-                                fg = 'magenta'
-                            elif num == '37':
-                                fg = 'white'
-                            elif num == '38':
-                                i += 1
-                                selector = nums[i]
-                                if selector == '2':
-                                    # r, g, b
-                                    i += 3
-                                elif selector == '5':
-                                    # 8-bit
-                                    idx = int(nums[i + 1])
-                                    if idx < 8:
-                                        nums[i + 1] = str(30 + idx)
-                                    elif idx < 16:
-                                        nums[i + 1] = str(90 + idx - 8)
-                                    else:
-                                        i += 1
-                            elif num == '39':
-                                fg = 'default'
-                            elif num == '40':
-                                bg = 'black'
-                            elif num == '41':
-                                bg = 'red'
-                            elif num == '42':
-                                bg = 'green'
-                            elif num == '43':
-                                bg = 'yellow'
-                            elif num == '44':
-                                bg = 'blue'
-                            elif num == '45':
-                                bg = 'cyan'
-                            elif num == '46':
-                                bg = 'magenta'
-                            elif num == '47':
-                                bg = 'white'
-                            elif num == '48':
-                                i += 1
-                                selector = nums[i]
-                                if selector == '2':
-                                    # r, g, b
-                                    i += 3
-                                elif selector == '5':
-                                    # 8-bit
-                                    idx = int(nums[i + 1])
-                                    if idx < 8:
-                                        nums[i + 1] = str(40 + idx)
-                                    elif idx < 16:
-                                        nums[i + 1] = str(100 + idx - 8)
-                                    else:
-                                        i += 1
-                            elif num == '49':
-                                bg = 'default'
-                            elif num == '90':
-                                fg = 'brightblack'
-                            elif num == '91':
-                                fg = 'brightred'
-                            elif num == '92':
-                                fg = 'brightgreen'
-                            elif num == '93':
-                                fg = 'brightyellow'
-                            elif num == '94':
-                                fg = 'brightblue'
-                            elif num == '95':
-                                fg = 'brightcyan'
-                            elif num == '96':
-                                fg = 'brightmagenta'
-                            elif num == '97':
-                                fg = 'brightwhite'
-                            elif num == '100':
-                                bg = 'brightblack'
-                            elif num == '101':
-                                bg = 'brightred'
-                            elif num == '102':
-                                bg = 'brightgreen'
-                            elif num == '103':
-                                bg = 'brightyellow'
-                            elif num == '104':
-                                bg = 'brightblue'
-                            elif num == '105':
-                                bg = 'brightcyan'
-                            elif num == '106':
-                                bg = 'brightmagenta'
-                            elif num == '107':
-                                bg = 'brightwhite'
-                            else:
-                                print('Unhandled SGR code: {} in {}'.format(
-                                    num, part
-                                ))
-                            i += 1
-                        scope = 'sgr.{}-on-{}'.format(fg, bg)
-                        if scope == 'sgr.default-on-default':
-                            scope = None
-                        self.scope = scope
-                        continue
-                    elif command == '@':
-                        arg = part[2:-1]
-                        if arg:
-                            n = int(arg)
-                        else:
-                            n = 1
-                        # keep cursor at start
-                        self.insert(self.cursor, ' ' * n)
-                        continue
-                    elif command == 'C':
-                        # right
-                        arg = part[2:-1]
-                        if arg:
-                            n = int(arg)
-                        else:
-                            n = 1
-                        self.cursor = min(self.cursor + n, view.size())
-                        self.move_cursor(follow)
-                        continue
-                    elif command == 'D':
-                        # left
-                        arg = part[2:-1]
-                        if arg:
-                            n = int(arg)
-                        else:
-                            n = 1
-                        self.cursor = max(self.cursor - n, 0)
-                        self.move_cursor(follow)
-                        continue
-                    elif command == 'K':
-                        arg = part[2:-1]
-                        if not arg or arg == '0':
-                            # clear to end of line
-                            classification = view.classify(self.cursor)
-                            if not classification & sublime.CLASS_LINE_END:
-                                eol = view.find_by_class(
-                                    self.cursor,
-                                    forward=True,
-                                    classes=sublime.CLASS_LINE_END
-                                )
-                                self.erase(sublime.Region(self.cursor, eol))
-                                self.move_cursor(follow)
-                            continue
-                        elif arg == '1':
-                            # clear to start of line
-                            classification = view.classify(self.cursor)
-                            if not classification & sublime.CLASS_LINE_START:
-                                bol = view.find_by_class(
-                                    self.cursor,
-                                    forward=False,
-                                    classes=sublime.CLASS_LINE_START
-                                )
-                                self.erase(sublime.Region(bol, self.cursor))
-                            continue
-                        elif arg == '2':
-                            # clear line
-                            classification = view.classify(self.cursor)
-                            if classification & sublime.CLASS_LINE_START:
-                                bol = self.cursor
-                            else:
-                                bol = view.find_by_class(
-                                    self.cursor,
-                                    forward=False,
-                                    classes=sublime.CLASS_LINE_START
-                                )
-                            if classification & sublime.CLASS_LINE_END:
-                                eol = self.cursor
-                            else:
-                                eol = view.find_by_class(
-                                    self.cursor,
-                                    forward=True,
-                                    classes=sublime.CLASS_LINE_END
-                                )
-                            self.erase(sublime.Region(bol, eol))
-                            self.move_cursor(follow)
-                            continue
-                    elif command == 'P':
-                        # delete n
-                        n = int(part[2:-1])
-                        end = self.cursor + n
-                        region = sublime.Region(self.cursor, end)
-                        self.delete(region)
-                        continue
-                    elif command in ('A', 'B', 'E', 'F', 'G', 'H', 'J', 'f'):
-                        # we don't handle other cursor movements, since we lie
-                        # about the screen width, so apps will get confused. We
-                        # ensure we are at the start of a line when we see them.
-                        pos = view.size()
-                        col = view.rowcol(pos)[1]
-                        if col != 0:
-                            pos = self.write(pos, '\n')
-                        self.cursor = pos
-                        self.move_cursor(follow)
-                        continue
-                    print('gidterm: [WARN] unknown control: {!r}'.format(part))
-                    self.cursor = self.write(self.cursor, part)
-                    self.move_cursor(follow)
+                self.handle_control(now, part)
         if self.out_start_time:
             # currently displaying output
-            output_stop_pos = self.cursor
-            if output_stop_pos > out_start_pos:
+            out_stop_pos = self.cursor
+            if out_stop_pos > self.start_pos:
+                settings = self.view.settings()
                 history = settings.get('gidterm_history')
-                history.append((0, [(out_start_pos, output_stop_pos)], ts))
+                history.append(
+                    (0, [(self.start_pos, out_stop_pos)], now.timestamp())
+                )
                 settings.set('gidterm_history', history)
+                self.start_pos = out_stop_pos
+
+    def handle_control(self, now, part):
+        view = self.view
+        ts = now.timestamp()
+        if part == '\x07':
+            view.set_name('[BASH]')
+            sublime.set_timeout(self.unbell, 250)
+            return
+        if part[0] == '\x08':
+            n = len(part)
+            if n > self.cursor:
+                n = self.cursor
+            self.cursor = self.cursor - n
+            self.move_cursor()
+            return
+        if part[0] == '\r':
+            if part[-1] == '\n':
+                self.cursor = self.write(view.size(), '\n')
+                self.move_cursor()
+            else:
+                # move cursor to start of line
+                classification = view.classify(self.cursor)
+                if not classification & sublime.CLASS_LINE_START:
+                    bol = view.find_by_class(
+                        self.cursor,
+                        forward=False,
+                        classes=sublime.CLASS_LINE_START
+                    )
+                    self.cursor = bol
+                    self.move_cursor()
+            return
+        settings = view.settings()
+        command = part[-1]
+        if command == 'p':
+            # prompt
+            arg = part[2:-1]
+            if arg.endswith('!'):
+                prompt_type = arg[0]
+                if prompt_type == '0':
+                    # trim trailing spaces from input command
+                    end = view.size() - 1
+                    assert view.substr(end) == '\n'
+                    in_end_pos = end
+                    while view.substr(in_end_pos - 1) == ' ':
+                        in_end_pos -= 1
+                    self.delete(sublime.Region(in_end_pos, end))
+                    # update history
+                    self.in_lines.append(
+                        (self.start_pos, in_end_pos)
+                    )
+                    history = settings.get('gidterm_history')
+                    history.append(
+                        (1, self.in_lines, ts)
+                    )
+                    settings.set('gidterm_history', history)
+                    self.in_lines = None
+                    self.cursor = self.start_pos = view.size()
+                    self.out_start_time = now
+                    return
+                elif prompt_type == '2':
+                    self.in_lines.append(
+                        (self.start_pos, self.cursor)
+                    )
+                    self.scope = 'sgr.magenta-on-default'
+                    self.cursor = self.write(self.cursor, '> ')
+                    self.scope = None
+                    self.start_pos = self.cursor
+                    self.move_cursor()
+                    return
+            else:
+                assert self.prompt_type is None, self.prompt_type
+                self.prompt_type = arg
+                self.prompt_text = ''
+                return
+        elif command == '~':
+            # end prompt
+            assert self.prompt_type == '1', self.prompt_type
+            ps1, status, virtualenv, pwd = self.prompt_text.split('@', 3)
+            input_ts = now
+            cursor = view.size()
+            if self.out_start_time is not None:
+                # currently displaying output
+                if cursor > self.start_pos:
+                    history = settings.get('gidterm_history')
+                    history.append((0, [(self.start_pos, cursor)], ts))
+                    settings.set('gidterm_history', history)
+                col = view.rowcol(cursor)[1]
+                if col != 0:
+                    cursor = self.write(cursor, '\n')
+                if status == '0':
+                    self.scope = 'sgr.green-on-default'
+                else:
+                    self.scope = 'sgr.red-on-default'
+                cursor = self.write(cursor, status)
+                info = _exit_status_info.get(status)
+                if info:
+                    self.scope = 'sgr.yellow-on-default'
+                    cursor = self.write(cursor, info)
+                if col == 0:
+                    self.scope = 'sgr.green-on-default'
+                else:
+                    self.scope = 'sgr.red-on-default'
+                cursor = self.write(cursor, '\u23ce')
+                self.scope = None
+                runtime = (input_ts - self.out_start_time)
+                s = int(round(runtime.total_seconds()))
+                td = timedelta(seconds=s)
+                cursor = self.write(cursor, ' {}'.format(td))
+                if virtualenv:
+                    self.scope = 'sgr.magenta-on-default'
+                    cursor = self.write(cursor, ' {}'.format(
+                        os.path.basename(virtualenv)
+                    ))
+                    self.scope = None
+                # Reset the output timestamp to None so that
+                # pressing enter for a blank line does not show
+                # an updated time since run
+                self.out_start_time = None
+            cursor = self.write(cursor, '\n')
+            self.scope = 'sgr.brightblack-on-default'
+            cursor = self.write(cursor, '[{}]'.format(pwd))
+            self.scope = 'sgr.magenta-on-default'
+            self.cursor = self.write(cursor, '\n{} '.format(ps1))
+            self.scope = None
+            self.start_pos = self.cursor
+            self.in_lines = []
+            self.move_cursor()
+            self.prompt_type = None
+            return
+        elif command == 'm':
+            arg = part[2:-1]
+            if not arg:
+                self.scope = None
+                return
+            fg = 'default'
+            bg = 'default'
+            nums = arg.split(';')
+            i = 0
+            while i < len(nums):
+                num = nums[i]
+                if num in ('0', '00'):
+                    fg = 'default'
+                    bg = 'default'
+                elif num == '30':
+                    fg = 'black'
+                elif num == '31':
+                    fg = 'red'
+                elif num == '32':
+                    fg = 'green'
+                elif num == '33':
+                    fg = 'yellow'
+                elif num == '34':
+                    fg = 'blue'
+                elif num == '35':
+                    fg = 'cyan'
+                elif num == '36':
+                    fg = 'magenta'
+                elif num == '37':
+                    fg = 'white'
+                elif num == '38':
+                    i += 1
+                    selector = nums[i]
+                    if selector == '2':
+                        # r, g, b
+                        i += 3
+                    elif selector == '5':
+                        # 8-bit
+                        idx = int(nums[i + 1])
+                        if idx < 8:
+                            nums[i + 1] = str(30 + idx)
+                        elif idx < 16:
+                            nums[i + 1] = str(90 + idx - 8)
+                        else:
+                            i += 1
+                elif num == '39':
+                    fg = 'default'
+                elif num == '40':
+                    bg = 'black'
+                elif num == '41':
+                    bg = 'red'
+                elif num == '42':
+                    bg = 'green'
+                elif num == '43':
+                    bg = 'yellow'
+                elif num == '44':
+                    bg = 'blue'
+                elif num == '45':
+                    bg = 'cyan'
+                elif num == '46':
+                    bg = 'magenta'
+                elif num == '47':
+                    bg = 'white'
+                elif num == '48':
+                    i += 1
+                    selector = nums[i]
+                    if selector == '2':
+                        # r, g, b
+                        i += 3
+                    elif selector == '5':
+                        # 8-bit
+                        idx = int(nums[i + 1])
+                        if idx < 8:
+                            nums[i + 1] = str(40 + idx)
+                        elif idx < 16:
+                            nums[i + 1] = str(100 + idx - 8)
+                        else:
+                            i += 1
+                elif num == '49':
+                    bg = 'default'
+                elif num == '90':
+                    fg = 'brightblack'
+                elif num == '91':
+                    fg = 'brightred'
+                elif num == '92':
+                    fg = 'brightgreen'
+                elif num == '93':
+                    fg = 'brightyellow'
+                elif num == '94':
+                    fg = 'brightblue'
+                elif num == '95':
+                    fg = 'brightcyan'
+                elif num == '96':
+                    fg = 'brightmagenta'
+                elif num == '97':
+                    fg = 'brightwhite'
+                elif num == '100':
+                    bg = 'brightblack'
+                elif num == '101':
+                    bg = 'brightred'
+                elif num == '102':
+                    bg = 'brightgreen'
+                elif num == '103':
+                    bg = 'brightyellow'
+                elif num == '104':
+                    bg = 'brightblue'
+                elif num == '105':
+                    bg = 'brightcyan'
+                elif num == '106':
+                    bg = 'brightmagenta'
+                elif num == '107':
+                    bg = 'brightwhite'
+                else:
+                    print('Unhandled SGR code: {} in {}'.format(
+                        num, part
+                    ))
+                i += 1
+            scope = 'sgr.{}-on-{}'.format(fg, bg)
+            if scope == 'sgr.default-on-default':
+                scope = None
+            self.scope = scope
+            return
+        elif command == '@':
+            arg = part[2:-1]
+            if arg:
+                n = int(arg)
+            else:
+                n = 1
+            # keep cursor at start
+            self.insert(self.cursor, ' ' * n)
+            return
+        elif command == 'C':
+            # right
+            arg = part[2:-1]
+            if arg:
+                n = int(arg)
+            else:
+                n = 1
+            self.cursor = min(self.cursor + n, view.size())
+            self.move_cursor()
+            return
+        elif command == 'D':
+            # left
+            arg = part[2:-1]
+            if arg:
+                n = int(arg)
+            else:
+                n = 1
+            self.cursor = max(self.cursor - n, 0)
+            self.move_cursor()
+            return
+        elif command == 'K':
+            arg = part[2:-1]
+            if not arg or arg == '0':
+                # clear to end of line
+                classification = view.classify(self.cursor)
+                if not classification & sublime.CLASS_LINE_END:
+                    eol = view.find_by_class(
+                        self.cursor,
+                        forward=True,
+                        classes=sublime.CLASS_LINE_END
+                    )
+                    self.erase(sublime.Region(self.cursor, eol))
+                    self.move_cursor()
+                return
+            elif arg == '1':
+                # clear to start of line
+                classification = view.classify(self.cursor)
+                if not classification & sublime.CLASS_LINE_START:
+                    bol = view.find_by_class(
+                        self.cursor,
+                        forward=False,
+                        classes=sublime.CLASS_LINE_START
+                    )
+                    self.erase(sublime.Region(bol, self.cursor))
+                return
+            elif arg == '2':
+                # clear line
+                classification = view.classify(self.cursor)
+                if classification & sublime.CLASS_LINE_START:
+                    bol = self.cursor
+                else:
+                    bol = view.find_by_class(
+                        self.cursor,
+                        forward=False,
+                        classes=sublime.CLASS_LINE_START
+                    )
+                if classification & sublime.CLASS_LINE_END:
+                    eol = self.cursor
+                else:
+                    eol = view.find_by_class(
+                        self.cursor,
+                        forward=True,
+                        classes=sublime.CLASS_LINE_END
+                    )
+                self.erase(sublime.Region(bol, eol))
+                self.move_cursor()
+                return
+        elif command == 'P':
+            # delete n
+            n = int(part[2:-1])
+            end = self.cursor + n
+            region = sublime.Region(self.cursor, end)
+            self.delete(region)
+            return
+        elif command in ('A', 'B', 'E', 'F', 'G', 'H', 'J', 'f'):
+            # we don't handle other cursor movements, since we lie
+            # about the screen width, so apps will get confused. We
+            # ensure we are at the start of a line when we see them.
+            pos = view.size()
+            col = view.rowcol(pos)[1]
+            if col != 0:
+                pos = self.write(pos, '\n')
+            self.cursor = pos
+            self.move_cursor()
+            return
+        print('gidterm: [WARN] unknown control: {!r}'.format(part))
+        self.cursor = self.write(self.cursor, part)
+        self.move_cursor()
 
     def loop(self):
         if _shellmap.get(self.view.id()) == self:
@@ -856,22 +854,23 @@ class GidtermEditingCommand(sublime_plugin.TextCommand):
         if shell:
             if key == 'insert':
                 buf = ''.join(view.substr(region) for region in view.sel())
-                if shell.in_start_pos is not None:
-                    buf = '\b' * (view.size() - shell.in_start_pos) + buf
                 view.settings().set('gidterm_follow', True)
-                shell.move_cursor(True)
+                shell.move_cursor()
+                if shell.in_lines is not None:
+                    buf = '\b' * (view.size() - shell.start_pos) + buf
                 shell.send(buf)
             elif key == 'delete':
-                if shell.in_start_pos is not None:
-                    buf = '\b' * (view.size() - shell.in_start_pos)
                 view.settings().set('gidterm_follow', True)
-                shell.move_cursor(True)
-                shell.send(buf)
+                shell.move_cursor()
+                if shell.in_lines is not None:
+                    buf = '\b' * (view.size() - shell.start_pos)
+                    shell.send(buf)
             elif key == 'ctrl+v':
-                buf = sublime.get_clipboard()
                 view.settings().set('gidterm_follow', True)
-                shell.move_cursor(True)
-                shell.send(buf)
+                shell.move_cursor()
+                buf = sublime.get_clipboard()
+                if buf:
+                    shell.send(buf)
             else:
                 print('unexpected editing key: {}'.format(key))
         else:
