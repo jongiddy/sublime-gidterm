@@ -15,15 +15,12 @@ import sublime_plugin
 _shellmap = {}
 
 
-profile = b'''
+profile = br'''
 if [ -r ~/.profile ]; then . ~/.profile; fi
-export PROMPT_COMMAND='PS1=\\\\[\\\\e[1p$?@${VIRTUAL_ENV}@\\\\w\\\\e[~\\\\]'
+export PROMPT_COMMAND='PS1=\\[\\e[1p\\]\\\$@\\[$?@${VIRTUAL_ENV}@\\w\\e[~\\]'
 export PROMPT_DIRTRIM=
-export PS0='\\e[0!p'
-export PS2='\\e[2!p'
-export PS3='\\e[3!p'
-# Don't replace PS4 because it gets used by Terraform without replacing
-# \\e with escape, so passes it through undetected.
+export PS0='\e[0!p'
+export PS2='\e[2!p'
 export TERM=ansi
 # Set COLUMNS to a standard size for commands run by the shell to avoid tools
 # creating wonky output, e.g. many tools display a completion percentage on the
@@ -172,6 +169,8 @@ class GidtermShell:
         self.prompt_type = None
         self.scope = None
         self.saved = ''
+        self.in_start_pos = None
+        self.in_lines = None
 
         _shellmap[view.id()] = self
 
@@ -366,7 +365,8 @@ class GidtermShell:
                         # prompt
                         arg = part[2:-1]
                         if arg.endswith('!'):
-                            if arg.startswith('0'):
+                            prompt_type = arg[0]
+                            if prompt_type == '0':
                                 # trim trailing spaces from input command
                                 end = view.size() - 1
                                 assert view.substr(end) == '\n'
@@ -375,19 +375,32 @@ class GidtermShell:
                                     in_end_pos -= 1
                                 self.delete(sublime.Region(in_end_pos, end))
                                 # update history
+                                self.in_lines.append(
+                                    (self.in_start_pos, in_end_pos)
+                                )
                                 history = settings.get('gidterm_history')
                                 history.append(
-                                    (self.in_start_pos, in_end_pos, 1, ts)
+                                    (1, self.in_lines, ts)
                                 )
                                 settings.set('gidterm_history', history)
                                 self.in_start_pos = None
+                                self.in_lines = None
                                 self.out_start_time = now
                                 self.cursor = out_start_pos = view.size()
-                            else:
-                                self.cursor = self.write(
-                                    self.cursor, '<{}>'.format(arg)
+                            elif prompt_type == '2':
+                                self.in_lines.append(
+                                    (self.in_start_pos, self.cursor)
                                 )
+                                self.scope = 'sgr.magenta-on-default'
+                                self.cursor = self.write(self.cursor, '> ')
+                                self.scope = None
+                                self.in_start_pos = self.cursor
                                 self.move_cursor(follow)
+                            else:
+                                print(
+                                    'gidterm: [WARN] unknown control:'
+                                    ' {!r}'.format(part)
+                                )
                         else:
                             assert self.prompt_type is None, self.prompt_type
                             self.prompt_type = arg
@@ -396,8 +409,8 @@ class GidtermShell:
                     elif command == '~':
                         # end prompt
                         assert self.prompt_type == '1', self.prompt_type
-                        status, virtualenv, workdir = self.prompt_text.split(
-                            '@', 2
+                        ps1, status, virtualenv, pwd = self.prompt_text.split(
+                            '@', 3
                         )
                         input_ts = now
                         cursor = view.size()
@@ -405,7 +418,9 @@ class GidtermShell:
                             # currently displaying output
                             if out_start_pos and cursor > out_start_pos:
                                 history = settings.get('gidterm_history')
-                                history.append((out_start_pos, cursor, 0, ts))
+                                history.append(
+                                    (0, [(out_start_pos, cursor)], ts)
+                                )
                                 settings.set('gidterm_history', history)
                                 out_start_pos = None
                             col = view.rowcol(cursor)[1]
@@ -442,10 +457,12 @@ class GidtermShell:
                             self.out_start_time = None
                         cursor = self.write(cursor, '\n')
                         self.scope = 'sgr.brightblack-on-default'
-                        cursor = self.write(cursor, '[{}]'.format(workdir))
+                        cursor = self.write(cursor, '[{}]'.format(pwd))
+                        self.scope = 'sgr.magenta-on-default'
+                        self.cursor = self.write(cursor, '\n{} '.format(ps1))
                         self.scope = None
-                        self.cursor = self.write(cursor, '\n')
                         self.in_start_pos = self.cursor
+                        self.in_lines = []
                         self.move_cursor(follow)
                         self.prompt_type = None
                         continue
@@ -662,7 +679,7 @@ class GidtermShell:
             output_stop_pos = self.cursor
             if output_stop_pos > out_start_pos:
                 history = settings.get('gidterm_history')
-                history.append((out_start_pos, output_stop_pos, 0, ts))
+                history.append((0, [(out_start_pos, output_stop_pos)], ts))
                 settings.set('gidterm_history', history)
 
     def loop(self):
@@ -819,7 +836,7 @@ class GidtermEditingCommand(sublime_plugin.TextCommand):
         shell = _shellmap.get(view.id())
         if shell:
             if key == 'insert':
-                buf = view.substr(view.sel()[0])
+                buf = ''.join(view.substr(region) for region in view.sel())
                 if shell.in_start_pos is not None:
                     buf = '\b' * (view.size() - shell.in_start_pos) + buf
                 view.settings().set('gidterm_follow', True)
@@ -850,18 +867,17 @@ class GidtermMoveToCommand(sublime_plugin.TextCommand):
             pos = sel[0].end()
             size = len(history)
             index = size // 2
-            while history and history[index][0] < pos:
+            while history and history[index][1][0][0] < pos:
                 history = history[index + 1:]
                 size = len(history)
                 index = size // 2
 
             for entry in history:
-                if entry[0] > pos and entry[2] == 1:
+                if entry[0] == 1 and entry[1][0][0] > pos:
                     sel = view.sel()
                     sel.clear()
-                    region = sublime.Region(entry[0], entry[1])
-                    sel.add(region)
-                    view.show(region)
+                    sel.add_all([sublime.Region(b, e) for (b, e) in entry[1]])
+                    view.show(sel)
                     return
             # Set to current command
             settings.set('gidterm_follow', True)
@@ -874,18 +890,17 @@ class GidtermMoveToCommand(sublime_plugin.TextCommand):
             pos = sel[0].begin()
             size = len(history)
             index = size // 2
-            while history and history[index][1] > pos:
+            while history and history[index][1][-1][1] > pos:
                 history = history[:index]
                 size = len(history)
                 index = size // 2
 
             for entry in reversed(history):
-                if entry[1] < pos and entry[2] == 1:
+                if entry[0] == 1 and entry[1][-1][1] < pos:
                     sel = view.sel()
                     sel.clear()
-                    region = sublime.Region(entry[0], entry[1])
-                    sel.add(region)
-                    view.show(region)
+                    sel.add_all([sublime.Region(b, e) for (b, e) in entry[1]])
+                    view.show(sel)
                     return
 
 
