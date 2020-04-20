@@ -739,6 +739,7 @@ class GidtermInputCommand(sublime_plugin.TextCommand):
 
 
 _follow_map = {
+    'enter': '\r',
     'escape': '\x1b\x1b',
     'up': '\x1b[A',
     'down': '\x1b[B',
@@ -851,7 +852,15 @@ class GidtermEditingCommand(sublime_plugin.TextCommand):
         view = self.view
         shell = _shellmap.get(view.id())
         if shell:
-            if key == 'insert':
+            if key == 'enter':
+                buf = ''.join(view.substr(region) for region in view.sel())
+                buf += '\r'
+                view.settings().set('gidterm_follow', True)
+                shell.move_cursor()
+                if shell.in_lines is not None:
+                    buf = '\b' * (view.size() - shell.start_pos) + buf
+                shell.send(buf)
+            elif key == 'insert':
                 buf = ''.join(view.substr(region) for region in view.sel())
                 view.settings().set('gidterm_follow', True)
                 shell.move_cursor()
