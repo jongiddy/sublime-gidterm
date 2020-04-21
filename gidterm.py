@@ -579,8 +579,32 @@ class GidtermShell:
                             nums[i + 1] = str(30 + idx)
                         elif idx < 16:
                             nums[i + 1] = str(90 + idx - 8)
+                        elif idx >= 254:
+                            nums[i + 1] = '15'  # mostly white
+                        elif idx >= 247:
+                            nums[i + 1] = '7'   # light grey
+                        elif idx >= 240:
+                            nums[i + 1] = '8'   # dark grey
+                        elif idx >= 232:
+                            nums[i + 1] = '0'   # mostly black
                         else:
-                            i += 1
+                            assert 16 <= idx <= 231, idx
+                            rg, b = divmod(idx, 6)
+                            r, g = divmod(idx, 6)
+                            r //= 3
+                            g //= 3
+                            b //= 3
+                            x = {
+                                (0, 0, 0): '8',
+                                (0, 0, 1): '12',
+                                (0, 1, 0): '10',
+                                (0, 1, 1): '14',
+                                (1, 0, 0): '9',
+                                (1, 0, 1): '13',
+                                (1, 1, 0): '11',
+                                (1, 1, 1): '7',
+                            }
+                            nums[i + 1] = x[(r, g, b)]
                 elif num == '39':
                     fg = 'default'
                 elif num == '40':
@@ -612,8 +636,31 @@ class GidtermShell:
                             nums[i + 1] = str(40 + idx)
                         elif idx < 16:
                             nums[i + 1] = str(100 + idx - 8)
+                        elif idx >= 254:
+                            nums[i + 1] = '15'  # mostly white
+                        elif idx >= 247:
+                            nums[i + 1] = '7'   # light grey
+                        elif idx >= 240:
+                            nums[i + 1] = '8'   # dark grey
+                        elif idx >= 232:
+                            nums[i + 1] = '0'   # mostly black
                         else:
-                            i += 1
+                            rg, b = divmod(idx, 6)
+                            r, g = divmod(idx, 6)
+                            r //= 3
+                            g //= 3
+                            b //= 3
+                            x = {
+                                (0, 0, 0): '8',
+                                (0, 0, 1): '12',
+                                (0, 1, 0): '10',
+                                (0, 1, 1): '14',
+                                (1, 0, 0): '9',
+                                (1, 0, 1): '13',
+                                (1, 1, 0): '11',
+                                (1, 1, 1): '7',
+                            }
+                            nums[i + 1] = x[(r, g, b)]
                 elif num == '49':
                     bg = 'default'
                 elif num == '90':
