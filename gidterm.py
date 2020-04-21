@@ -550,6 +550,9 @@ class GidtermShell:
                 if num in ('0', '00'):
                     fg = 'default'
                     bg = 'default'
+                elif num in ('1', '01', '2', '02', '22'):
+                    # TODO: handle bold/faint intensity
+                    pass
                 elif num == '30':
                     fg = 'black'
                 elif num == '31':
