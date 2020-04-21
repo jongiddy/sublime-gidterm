@@ -5,11 +5,11 @@ import pty
 import re
 import select
 import signal
+import subprocess
 import tempfile
 
 import sublime
 import sublime_plugin
-
 
 # Map from view id to shell
 _shellmap = {}
@@ -133,6 +133,40 @@ class Shell:
 
     def receive(self):
         return self.decoder.decode(os.read(self.fd, 4096))
+
+
+def get_vcs_branch(d):
+    # return branch, and a code for status
+    # 2 = dirty
+    # 1 = not synced with upstream
+    # 0 = synced with upstream
+    try:
+        out = subprocess.check_output(
+            ('git', 'branch', '--contains', 'HEAD'),
+            cwd=d,
+            universal_newlines=True,
+        ).strip()
+        lines = out.split('\n')
+        branches = []
+        for s in lines:
+            if s[0] == '*':
+                branch = s.strip()
+            else:
+                branches.append(s)
+        if branches:
+            on = ','.join(s.strip() for s in branches)
+            branch = '{} on {}'.format(branch, on)
+        out = subprocess.check_output(
+            ('git', 'status', '--porcelain'),
+            cwd=d,
+        )
+        for line in out.split(b'\n'):
+            if line[:2].strip():
+                return branch, 2
+        return branch, 0
+    except subprocess.CalledProcessError as e:
+        print(e)
+    return None, 0
 
 
 class GidtermShell:
@@ -429,15 +463,15 @@ class GidtermShell:
             ps1, status, virtualenv, pwd = self.prompt_text.split('@', 3)
             input_ts = now
             cursor = view.size()
+            col = view.rowcol(cursor)[1]
+            if col != 0:
+                cursor = self.write(cursor, '\n')
             if self.out_start_time is not None:
                 # currently displaying output
                 if cursor > self.start_pos:
                     history = settings.get('gidterm_history')
                     history.append((0, [(self.start_pos, cursor)], ts))
                     settings.set('gidterm_history', history)
-                col = view.rowcol(cursor)[1]
-                if col != 0:
-                    cursor = self.write(cursor, '\n')
                 if status == '0':
                     self.scope = 'sgr.green-on-default'
                 else:
@@ -456,18 +490,35 @@ class GidtermShell:
                 runtime = (input_ts - self.out_start_time)
                 s = int(round(runtime.total_seconds()))
                 td = timedelta(seconds=s)
-                cursor = self.write(cursor, ' {}'.format(td))
-                if virtualenv:
-                    self.scope = 'sgr.magenta-on-default'
-                    cursor = self.write(cursor, ' {}'.format(
-                        os.path.basename(virtualenv)
-                    ))
-                    self.scope = None
+                cursor = self.write(cursor, ' {}\n'.format(td))
                 # Reset the output timestamp to None so that
                 # pressing enter for a blank line does not show
                 # an updated time since run
                 self.out_start_time = None
-            cursor = self.write(cursor, '\n')
+            extra_line = False
+            if virtualenv:
+                self.scope = 'sgr.magenta-on-default'
+                cursor = self.write(cursor, '{}'.format(
+                    os.path.basename(virtualenv)
+                ))
+                extra_line = True
+            branch, status = get_vcs_branch(os.path.expanduser(pwd))
+            if branch:
+                if extra_line:
+                    cursor = self.write(cursor, ' ')
+                if status == 0:
+                    self.scope = 'sgr.green-on-default'
+                elif status == 1:
+                    self.scope = 'sgr.yellow-on-default'
+                else:
+                    self.scope = 'sgr.red-on-default'
+                cursor = self.write(cursor, '{}'.format(
+                    branch
+                ))
+                extra_line = True
+            self.scope = None
+            if extra_line:
+                cursor = self.write(cursor, '\n')
             self.scope = 'sgr.brightblack-on-default'
             cursor = self.write(cursor, '[{}]'.format(pwd))
             self.scope = 'sgr.magenta-on-default'
