@@ -176,6 +176,11 @@ def get_vcs_branch(d):
     return None, 0
 
 
+def timedelta_seconds(td):
+    s = int(round(td.total_seconds()))
+    return timedelta(seconds=s)
+
+
 class GidtermShell:
 
     _escape_pat = re.compile(
@@ -192,7 +197,7 @@ class GidtermShell:
     def __init__(self, view, workdir):
         self.view = view
         settings = view.settings()
-        view.set_name('[bash]')
+        view.set_name('{} [0]'.format(os.path.basename(workdir)))
         view.set_scratch(True)
         view.set_syntax_file('Packages/sublime-gidterm/gidterm.sublime-syntax')
         view.set_line_endings('Unix')
@@ -328,9 +333,6 @@ class GidtermShell:
             view.run_command("left_delete")
             view.set_read_only(True)
 
-    def unbell(self):
-        self.view.set_name('[bash]')
-
     def at_cursor(self):
         cursor = self.cursor
         for region in self.view.sel():
@@ -394,8 +396,6 @@ class GidtermShell:
         view = self.view
         ts = now.timestamp()
         if part == '\x07':
-            view.set_name('[BASH]')
-            sublime.set_timeout(self.unbell, 250)
             return
         if part[0] == '\x08':
             n = len(part)
@@ -468,7 +468,6 @@ class GidtermShell:
             # end prompt
             assert self.prompt_type == '1', self.prompt_type
             ps1, status, virtualenv, pwd = self.prompt_text.split('@', 3)
-            input_ts = now
             cursor = view.size()
             col = view.rowcol(cursor)[1]
             if col != 0:
@@ -494,10 +493,9 @@ class GidtermShell:
                     self.scope = 'sgr.red-on-default'
                 cursor = self.write(cursor, '\u23ce')
                 self.scope = None
-                runtime = (input_ts - self.out_start_time)
-                s = int(round(runtime.total_seconds()))
-                td = timedelta(seconds=s)
-                cursor = self.write(cursor, ' {}\n'.format(td))
+                elapsed = timedelta_seconds(now - self.out_start_time)
+                cursor = self.write(cursor, ' {}\n'.format(elapsed))
+                view.set_name('{} [{}]'.format(os.path.basename(pwd), status))
                 # Reset the output timestamp to None so that
                 # pressing enter for a blank line does not show
                 # an updated time since run
@@ -809,12 +807,21 @@ class GidtermShell:
     def loop(self):
         if _shellmap.get(self.view.id()) == self:
             if not self.shell.ready():
+                now = datetime.now(timezone.utc)
+                if self.out_start_time is not None:
+                    elapsed = timedelta_seconds(now - self.out_start_time)
+                    self.view.set_name('{}'.format(elapsed))
                 sublime.set_timeout(self.loop, 50)
             else:
                 try:
                     s = self.shell.receive()
                     if s:
                         now = datetime.now(timezone.utc)
+                        if self.out_start_time is not None:
+                            elapsed = timedelta_seconds(
+                                now - self.out_start_time
+                            )
+                            self.view.set_name('{}'.format(elapsed))
                         self.handle_output(s, now)
                         sublime.set_timeout(self.loop, 1)
                     else:
