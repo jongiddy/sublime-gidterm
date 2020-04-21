@@ -204,7 +204,7 @@ class GidtermShell:
             'color_scheme',
             'Packages/sublime-gidterm/gidterm.sublime-color-scheme'
         )
-        settings.set('gidterm_follow', True)
+        _set_terminal_mode(view)
         settings.set('gidterm_history', [])
 
         # `cursor` is the location of the input cursor. It is often the end of
@@ -348,7 +348,7 @@ class GidtermShell:
         if sel_first < input_first:
             # user has clicked in the area before active command:
             # change to browse mode
-            view.settings().set('gidterm_follow', False)
+            _set_browse_mode(view)
 
     def handle_output(self, s, now):
         # Add any saved text from previous iteration, split text on control
@@ -811,15 +811,32 @@ class GidtermShell:
             if not self.shell.ready():
                 sublime.set_timeout(self.loop, 50)
             else:
-                s = self.shell.receive()
-                if s:
-                    now = datetime.now(timezone.utc)
-                    self.handle_output(s, now)
-                    sublime.set_timeout(self.loop, 1)
-                else:
+                try:
+                    s = self.shell.receive()
+                    if s:
+                        now = datetime.now(timezone.utc)
+                        self.handle_output(s, now)
+                        sublime.set_timeout(self.loop, 1)
+                    else:
+                        self.shell.close()
+                        _set_browse_mode(self.view)
+                except OSError:
                     self.shell.close()
+                    _set_browse_mode(self.view)
+                    raise
         else:
             self.shell.close()
+            _set_browse_mode(self.view)
+
+
+def _set_browse_mode(view):
+    view.settings().set('gidterm_follow', False)
+    view.set_status('gidterm_mode', 'Browse mode')
+
+
+def _set_terminal_mode(view):
+    view.settings().set('gidterm_follow', True)
+    view.set_status('gidterm_mode', 'Terminal mode')
 
 
 class GidtermCommand(sublime_plugin.TextCommand):
@@ -840,10 +857,11 @@ class GidtermInputCommand(sublime_plugin.TextCommand):
     def run(self, edit, key):
         shell = _shellmap.get(self.view.id())
         if shell:
-            self.view.settings().set('gidterm_follow', True)
+            _set_terminal_mode(self.view)
             shell.send(key)
         else:
             print('disconnected')
+            _set_browse_mode(self.view)
 
 
 _follow_map = {
@@ -898,6 +916,7 @@ class GidtermFollowingCommand(sublime_plugin.TextCommand):
                 shell.send(s)
         else:
             print('disconnected')
+            _set_browse_mode(view)
 
 
 _follow_escape = {
@@ -950,7 +969,7 @@ class GidtermEscapeCommand(sublime_plugin.TextCommand):
         if action is None:
             print('unexpected escape key: {}'.format(key))
         else:
-            self.view.settings().set('gidterm_follow', False)
+            _set_browse_mode(self.view)
             action(self.view)
 
 
@@ -963,26 +982,26 @@ class GidtermEditingCommand(sublime_plugin.TextCommand):
             if key == 'enter':
                 buf = ''.join(view.substr(region) for region in view.sel())
                 buf += '\r'
-                view.settings().set('gidterm_follow', True)
+                _set_terminal_mode(view)
                 shell.move_cursor()
                 if shell.in_lines is not None:
                     buf = '\b' * (view.size() - shell.start_pos) + buf
                 shell.send(buf)
             elif key == 'insert':
                 buf = ''.join(view.substr(region) for region in view.sel())
-                view.settings().set('gidterm_follow', True)
+                _set_terminal_mode(view)
                 shell.move_cursor()
                 if shell.in_lines is not None:
                     buf = '\b' * (view.size() - shell.start_pos) + buf
                 shell.send(buf)
             elif key == 'delete':
-                view.settings().set('gidterm_follow', True)
+                _set_terminal_mode(view)
                 shell.move_cursor()
                 if shell.in_lines is not None:
                     buf = '\b' * (view.size() - shell.start_pos)
                     shell.send(buf)
             elif key == 'ctrl+v':
-                view.settings().set('gidterm_follow', True)
+                _set_terminal_mode(view)
                 shell.move_cursor()
                 buf = sublime.get_clipboard()
                 if buf:
@@ -991,6 +1010,7 @@ class GidtermEditingCommand(sublime_plugin.TextCommand):
                 print('unexpected editing key: {}'.format(key))
         else:
             print('disconnected')
+            _set_browse_mode(view)
 
 
 class GidtermMoveToCommand(sublime_plugin.TextCommand):
@@ -1017,7 +1037,7 @@ class GidtermMoveToCommand(sublime_plugin.TextCommand):
                     view.show(sel)
                     return
             # Set to current command
-            settings.set('gidterm_follow', True)
+            _set_terminal_mode(view)
             end = view.size()
             sel = view.sel()
             sel.clear()
