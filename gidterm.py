@@ -160,9 +160,16 @@ def get_vcs_branch(d):
             ('git', 'status', '--porcelain'),
             cwd=d,
         )
+        warn = False
         for line in out.split(b'\n'):
-            if line[:2].strip():
+            state = line[:2]
+            if state == b'??':
+                warn = True
+            elif state.strip():
+                # any other state apart from '  '
                 return branch, 2
+        if warn:
+            return branch, 1
         return branch, 0
     except subprocess.CalledProcessError as e:
         print(e)
