@@ -16,21 +16,44 @@ _shellmap = {}
 
 
 profile = br'''
+# Read the standard profile, to give a familiar environment.  The profile can
+# detect that it is in GidTerm using the `TERM_PROGRAM` environment variable.
+export TERM_PROGRAM=Sublime-GidTerm
 if [ -r ~/.profile ]; then . ~/.profile; fi
+
+# Replace the settings needed for GidTerm to work, notably the prompt formats.
 export PROMPT_COMMAND='PS1=\\[\\e[1p\\]\\\$@\\[$?@${VIRTUAL_ENV}@\\w\\e[~\\]'
 export PROMPT_DIRTRIM=
 export PS0='\e[0!p'
 export PS2='\e[2!p'
 export TERM=ansi
+
 # Set LINES and COLUMNS to a standard size for commands run by the shell to
 # avoid tools creating wonky output, e.g. many tools display a completion
 # percentage on the right side of the screen.  man pages are formatted to fit
-# the width COLUMNS.
+# the width COLUMNS.  Prevent bash from resetting these variables.
+#
 shopt -u checkwinsize
 export COLUMNS=80
 export LINES=24
-# Avoid paging by using cat as the default pager
+
+# Avoid paging by using `cat` as the default pager.  This is generally nicer
+# because you can scroll and search using Sublime Text.  It's not so great for
+# `git log` where you typically only want the first page or two.  To fix this,
+# set the `GIT_PAGER` environment variable or the Git `core.pager`
+# config variable.  A good configuration for Git is:
+#    core.editor=/usr/bin/subl --wait
+#    core.pager=/bin/more
+# If you want simple `more` inside GidTerm but more features from `less`
+# outside GidTerm, then set `GIT_PAGER` in your profile:
+#    if [ "$TERM_PROGRAM" == "Sublime-GidTerm" ]; then
+#      export GIT_PAGER=/bin/more
+#    else
+#      export GIT_PAGER=/usr/bin/less
+#    fi
+#
 export PAGER=/bin/cat
+
 # Don't add control commands to the history
 export HISTIGNORE=${HISTIGNORE:+${HISTIGNORE}:}'*# [@gidterm@]'
 '''
