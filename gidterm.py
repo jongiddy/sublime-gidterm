@@ -838,11 +838,15 @@ class GidtermShell:
 
 def _set_browse_mode(view):
     view.settings().set('gidterm_follow', False)
+    view.settings().set('block_caret', False)
+    view.settings().set('caret_style', 'blink')
     view.set_status('gidterm_mode', 'Browse mode')
 
 
 def _set_terminal_mode(view):
     view.settings().set('gidterm_follow', True)
+    view.settings().set('block_caret', True)
+    view.settings().set('caret_style', 'solid')
     view.set_status('gidterm_mode', 'Terminal mode')
 
 
