@@ -1,19 +1,11 @@
 [
 {"keys": ["shift+ctrl+g"], "command": "gidterm"},
 
-{"keys": ["enter"], "command": "gidterm_editing", "args": {"key": "enter"}, "context": [
-	{"key": "setting.is_gidterm"},
-	{"key": "setting.gidterm_follow", "operator": "equal", "operand": false}
-]},
-{"keys": ["insert"], "command": "gidterm_editing", "args": {"key": "insert"}, "context": [
-	{"key": "setting.is_gidterm"},
-	{"key": "setting.gidterm_follow", "operator": "equal", "operand": false}
-]},
-{"keys": ["delete"], "command": "gidterm_editing", "args": {"key": "delete"}, "context": [
-	{"key": "setting.is_gidterm"},
-	{"key": "setting.gidterm_follow", "operator": "equal", "operand": false}
-]},
-{"keys": ["ctrl+v"], "command": "gidterm_editing", "args": {"key": "ctrl+v"}, "context": [
+{"keys": ["insert"], "command": "gidterm_insert", "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["shift+insert"], "command": "gidterm_replace", "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["shift+delete"], "command": "gidterm_delete", "context": [{"key": "setting.is_gidterm"}]},
+
+{"keys": ["ctrl+v"], "command": "gidterm_insert", "context": [
 	{"key": "setting.is_gidterm"},
 	{"key": "setting.gidterm_follow", "operator": "equal", "operand": false}
 ]},
@@ -39,14 +31,11 @@
 {"keys": ["shift+ctrl+pageup"], "command": "gidterm_escape", "args": {"key": "shift+ctrl+pageup"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["shift+ctrl+pagedown"], "command": "gidterm_escape", "args": {"key": "shift+ctrl+pagedown"}, "context": [{"key": "setting.gidterm_follow"}]},
 
-{"keys": ["enter"], "command": "gidterm_following", "args": {"key": "enter"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["escape"], "command": "gidterm_following", "args": {"key": "escape"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["up"], "command": "gidterm_following", "args": {"key": "up"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["down"], "command": "gidterm_following", "args": {"key": "down"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["left"], "command": "gidterm_following", "args": {"key": "left"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["right"], "command": "gidterm_following", "args": {"key": "right"}, "context": [{"key": "setting.gidterm_follow"}]},
-{"keys": ["insert"], "command": "gidterm_following", "args": {"key": "insert"}, "context": [{"key": "setting.gidterm_follow"}]},
-{"keys": ["delete"], "command": "gidterm_following", "args": {"key": "delete"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["ctrl+@"], "command": "gidterm_following", "args": {"key": "ctrl+@"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["ctrl+a"], "command": "gidterm_following", "args": {"key": "ctrl+a"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["ctrl+b"], "command": "gidterm_following", "args": {"key": "ctrl+b"}, "context": [{"key": "setting.gidterm_follow"}]},
@@ -76,7 +65,9 @@
 {"keys": ["ctrl+z"], "command": "gidterm_following", "args": {"key": "ctrl+z"}, "context": [{"key": "setting.gidterm_follow"}]},
 
 {"keys": ["backspace"], "command": "gidterm_input", "args": {"key": "\b"}, "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["delete"], "command": "gidterm_input", "args": {"key": "\u001b[3~"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["tab"], "command": "gidterm_input", "args": {"key": "\t"}, "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["enter"], "command": "gidterm_input", "args": {"key": "\r"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["ctrl+enter"], "command": "gidterm_input", "args": {"key": "\n"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": [" "], "command": "gidterm_input", "args": {"key": " "}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["!"], "command": "gidterm_input", "args": {"key": "!"}, "context": [{"key": "setting.is_gidterm"}]},

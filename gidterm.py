@@ -899,14 +899,11 @@ class GidtermInputCommand(sublime_plugin.TextCommand):
 
 
 _follow_map = {
-    'enter': '\r',
     'escape': '\x1b\x1b',
     'up': '\x1b[A',
     'down': '\x1b[B',
     'right': '\x1b[C',
     'left': '\x1b[D',
-    'insert': '\x1b[2~',
-    'delete': '\x1b[3~',
     'ctrl+@': '\x00',
     'ctrl+a': '\x01',
     'ctrl+b': '\x02',
@@ -943,11 +940,16 @@ class GidtermFollowingCommand(sublime_plugin.TextCommand):
         view = self.view
         shell = _shellmap.get(view.id())
         if shell:
-            s = _follow_map.get(key)
-            if s is None:
-                print('unexpected follow key: {}'.format(key))
+            if key == 'insert':
+                buf = sublime.get_clipboard()
+                if buf:
+                    shell.send(buf)
             else:
-                shell.send(s)
+                s = _follow_map.get(key)
+                if s is None:
+                    print('unexpected follow key: {}'.format(key))
+                else:
+                    shell.send(s)
         else:
             print('disconnected')
             _set_browse_mode(view)
@@ -1015,14 +1017,6 @@ class GidtermEditingCommand(sublime_plugin.TextCommand):
         if shell:
             if key == 'enter':
                 buf = ''.join(view.substr(region) for region in view.sel())
-                buf += '\r'
-                _set_terminal_mode(view)
-                shell.move_cursor()
-                if shell.in_lines is not None:
-                    buf = '\b' * (view.size() - shell.start_pos) + buf
-                shell.send(buf)
-            elif key == 'insert':
-                buf = ''.join(view.substr(region) for region in view.sel())
                 _set_terminal_mode(view)
                 shell.move_cursor()
                 if shell.in_lines is not None:
@@ -1034,14 +1028,62 @@ class GidtermEditingCommand(sublime_plugin.TextCommand):
                 if shell.in_lines is not None:
                     buf = '\b' * (view.size() - shell.start_pos)
                     shell.send(buf)
-            elif key == 'ctrl+v':
-                _set_terminal_mode(view)
-                shell.move_cursor()
-                buf = sublime.get_clipboard()
-                if buf:
-                    shell.send(buf)
             else:
                 print('unexpected editing key: {}'.format(key))
+        else:
+            print('disconnected')
+            _set_browse_mode(view)
+
+
+class GidtermInsertCommand(sublime_plugin.TextCommand):
+
+    def run(self, edit):
+        view = self.view
+        shell = _shellmap.get(view.id())
+        if shell:
+            if not view.settings().get('gidterm_follow'):
+                _set_terminal_mode(view)
+                shell.move_cursor()
+            buf = sublime.get_clipboard()
+            if buf:
+                shell.send(buf)
+        else:
+            print('disconnected')
+            _set_browse_mode(view)
+
+
+class GidtermReplaceCommand(sublime_plugin.TextCommand):
+
+    def run(self, edit):
+        view = self.view
+        shell = _shellmap.get(view.id())
+        if shell:
+            if not view.settings().get('gidterm_follow'):
+                _set_terminal_mode(view)
+                shell.move_cursor()
+            buf = sublime.get_clipboard()
+            if shell.in_lines is not None:
+                buf = '\b' * (view.size() - shell.start_pos) + buf
+            if buf:
+                shell.send(buf)
+        else:
+            print('disconnected')
+            _set_browse_mode(view)
+
+
+class GidtermDeleteCommand(sublime_plugin.TextCommand):
+
+    def run(self, edit):
+        view = self.view
+        shell = _shellmap.get(view.id())
+        if shell:
+            if not view.settings().get('gidterm_follow'):
+                _set_terminal_mode(view)
+                shell.move_cursor()
+            if shell.in_lines is not None:
+                buf = '\b' * (view.size() - shell.start_pos)
+            if buf:
+                shell.send(buf)
         else:
             print('disconnected')
             _set_browse_mode(view)

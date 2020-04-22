@@ -1,10 +1,10 @@
 # Sublime GidTerm
 
-Terminal that runs inside SublimeText. Alpha quality. Linux only.
+Terminal that runs inside Sublime Text. Alpha quality. Linux only.
 
 ## Install
 
-Clone this repo into your SublimeText packages repository.
+Clone this repo into your Sublime Text packages repository.
 
 For example:
 ```
@@ -34,14 +34,14 @@ The shell tab has two modes:
 In terminal mode, change to browse mode using one of the following:
 
 - Click above the active command line; 
-- `Home`, `End`, `PageUp`, `PageDown` (including with `Shift` and `Ctrl` modifiers);
+- `Home`, `End`, `PageUp`, `PageDown` (including with `Shift` and `Ctrl` modifiers) to perform the usual Sublime Text navigation;
+- `Shift-Ctrl-PageUp` and `Shift-Ctrl-PageDown` to select the previous or next command respectively.
 
 In browse mode, change to terminal mode using one of the following:
 
-- Type any printing character;
-- `Ctrl-V` to paste the clipboard into the contents of the command prompt;
-- `Delete` to delete the contents of the command prompt;
-- `Insert` to replace the contents of the command prompt with the selected text;
-- `Enter` to run the selected text as a command.
+- Type any printing character, including `Enter`, `Tab`, `Backspace`, and `Delete`;
+- `Insert` or `Ctrl-V` to insert the clipboard into the command prompt;
+- `Shift-Insert` to delete the contents of the command prompt and replace with the clipboard;
+- `Shift-Delete` to delete the contents of the command prompt;
 
-In both modes `Shift-Ctrl-PageUp` and `Shift-Ctrl-PageDown` will select the previous or next command respectively (and change to browse mode).
+All of these, except `Ctrl-V`, perform the same action in both modes.
