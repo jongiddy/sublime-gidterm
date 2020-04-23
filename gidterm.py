@@ -233,7 +233,6 @@ class GidtermShell:
             'color_scheme',
             'Packages/sublime-gidterm/gidterm.sublime-color-scheme'
         )
-        _set_terminal_mode(view)
         settings.set('gidterm_history', [])
         settings.set('gidterm_pwd', [(view.size(), workdir)])
 
@@ -249,6 +248,9 @@ class GidtermShell:
         self.saved = ''
 
         _shellmap[view.id()] = self
+
+        _set_terminal_mode(view)
+        self.move_cursor()
 
         self.shell = Shell()
         self.shell.fork(workdir)
@@ -464,6 +466,7 @@ class GidtermShell:
                 prompt_type = arg[0]
                 if prompt_type == '0':
                     # trim trailing spaces from input command
+                    assert self.cursor == view.size()
                     end = view.size() - 1
                     assert view.substr(end) == '\n'
                     in_end_pos = end
@@ -471,8 +474,9 @@ class GidtermShell:
                         in_end_pos -= 1
                     self.delete(sublime.Region(in_end_pos, end))
                     # update history
+                    assert view.substr(in_end_pos) == '\n'
                     self.in_lines.append(
-                        (self.start_pos, in_end_pos)
+                        (self.start_pos, in_end_pos + 1)
                     )
                     history = settings.get('gidterm_history')
                     history.append(
@@ -485,8 +489,11 @@ class GidtermShell:
                     self.out_start_time = now
                     return
                 elif prompt_type == '2':
+                    assert self.cursor == view.size()
+                    end = view.size() - 1
+                    assert view.substr(end) == '\n'
                     self.in_lines.append(
-                        (self.start_pos, self.cursor)
+                        (self.start_pos, end)
                     )
                     self.scope = 'sgr.magenta-on-default'
                     self.cursor = self.write(self.cursor, '> ')
@@ -909,6 +916,7 @@ class GidtermInputCommand(sublime_plugin.TextCommand):
         shell = _shellmap.get(self.view.id())
         if shell:
             _set_terminal_mode(self.view)
+            shell.move_cursor()
             shell.send(key)
         else:
             print('disconnected')
@@ -1026,35 +1034,9 @@ class GidtermEscapeCommand(sublime_plugin.TextCommand):
             action(self.view)
 
 
-class GidtermEditingCommand(sublime_plugin.TextCommand):
-
-    def run(self, edit, key):
-        view = self.view
-        shell = _shellmap.get(view.id())
-        if shell:
-            if key == 'enter':
-                buf = ''.join(view.substr(region) for region in view.sel())
-                _set_terminal_mode(view)
-                shell.move_cursor()
-                if shell.in_lines is not None:
-                    buf = '\b' * (view.size() - shell.start_pos) + buf
-                shell.send(buf)
-            elif key == 'delete':
-                _set_terminal_mode(view)
-                shell.move_cursor()
-                if shell.in_lines is not None:
-                    buf = '\b' * (view.size() - shell.start_pos)
-                    shell.send(buf)
-            else:
-                print('unexpected editing key: {}'.format(key))
-        else:
-            print('disconnected')
-            _set_browse_mode(view)
-
-
 class GidtermInsertCommand(sublime_plugin.TextCommand):
 
-    def run(self, edit):
+    def run(self, edit, strip):
         view = self.view
         shell = _shellmap.get(view.id())
         if shell:
@@ -1062,6 +1044,8 @@ class GidtermInsertCommand(sublime_plugin.TextCommand):
                 _set_terminal_mode(view)
                 shell.move_cursor()
             buf = sublime.get_clipboard()
+            if strip:
+                buf = buf.strip()
             if buf:
                 shell.send(buf)
         else:
@@ -1078,7 +1062,7 @@ class GidtermReplaceCommand(sublime_plugin.TextCommand):
             if not view.settings().get('gidterm_follow'):
                 _set_terminal_mode(view)
                 shell.move_cursor()
-            buf = sublime.get_clipboard()
+            buf = sublime.get_clipboard().strip()
             if shell.in_lines is not None:
                 buf = '\b' * (view.size() - shell.start_pos) + buf
             if buf:
@@ -1131,11 +1115,16 @@ class GidtermMoveToCommand(sublime_plugin.TextCommand):
                     return
             # Set to current command
             _set_terminal_mode(view)
-            end = view.size()
-            sel = view.sel()
-            sel.clear()
-            sel.add(end)
-            view.show(end)
+            self.move_cursor()
+            shell = _shellmap.get(view.id())
+            if shell:
+                shell.move_cursor()
+            else:
+                end = view.size()
+                sel = view.sel()
+                sel.clear()
+                sel.add(end)
+                view.show(end)
         else:
             pos = sel[0].begin()
             size = len(history)

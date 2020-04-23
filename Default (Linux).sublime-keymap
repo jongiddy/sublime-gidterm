@@ -1,11 +1,11 @@
 [
 {"keys": ["shift+ctrl+g"], "command": "gidterm"},
 
-{"keys": ["insert"], "command": "gidterm_insert", "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["insert"], "command": "gidterm_insert", "args": {"strip": true}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["shift+insert"], "command": "gidterm_replace", "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["shift+delete"], "command": "gidterm_delete", "context": [{"key": "setting.is_gidterm"}]},
 
-{"keys": ["ctrl+v"], "command": "gidterm_insert", "context": [
+{"keys": ["ctrl+v"], "command": "gidterm_insert", "args": {"strip": false}, "context": [
 	{"key": "setting.is_gidterm"},
 	{"key": "setting.gidterm_follow", "operator": "equal", "operand": false}
 ]},
