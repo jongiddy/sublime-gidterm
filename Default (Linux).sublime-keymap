@@ -1,7 +1,7 @@
 [
 {"keys": ["shift+ctrl+g"], "command": "gidterm"},
 
-{"keys": ["insert"], "command": "gidterm_insert", "args": {"strip": true}, "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["ctrl+insert"], "command": "gidterm_insert", "args": {"strip": true}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["shift+insert"], "command": "gidterm_replace", "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["shift+delete"], "command": "gidterm_delete", "context": [{"key": "setting.is_gidterm"}]},
 
@@ -65,8 +65,10 @@
 {"keys": ["ctrl+z"], "command": "gidterm_following", "args": {"key": "ctrl+z"}, "context": [{"key": "setting.gidterm_follow"}]},
 
 {"keys": ["backspace"], "command": "gidterm_input", "args": {"key": "\b"}, "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["insert"], "command": "gidterm_input", "args": {"key": "\u001b[L"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["delete"], "command": "gidterm_input", "args": {"key": "\u001b[3~"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["tab"], "command": "gidterm_input", "args": {"key": "\t"}, "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["shift+tab"], "command": "gidterm_input", "args": {"key": "\u001b[Z"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["enter"], "command": "gidterm_input", "args": {"key": "\r"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["ctrl+enter"], "command": "gidterm_input", "args": {"key": "\n"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": [" "], "command": "gidterm_input", "args": {"key": " "}, "context": [{"key": "setting.is_gidterm"}]},

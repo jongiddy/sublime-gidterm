@@ -41,7 +41,7 @@ In browse mode, change to terminal mode using one of the following:
 
 - Type any printing character, including `Enter`, `Tab`, `Backspace`, and `Delete`;
 - `Ctrl-V` to insert the clipboard into the command prompt;
-- `Insert` to insert the clipboard into the command prompt with surrounding whitespace removed;
+- `Ctrl-Insert` to insert the clipboard into the command prompt with surrounding whitespace removed;
 - `Shift-Insert` to delete the contents of the command prompt and replace with the clipboard with surrounding whitespace removed;
 - `Shift-Delete` to delete the contents of the command prompt;
 
