@@ -219,8 +219,9 @@ class GidtermShell:
 
     def __init__(self, view, workdir):
         self.view = view
+        self.pwd = workdir
+        self.set_title('')
         settings = view.settings()
-        view.set_name('{} [0]'.format(os.path.basename(workdir)))
         view.set_scratch(True)
         view.set_syntax_file('Packages/sublime-gidterm/gidterm.sublime-syntax')
         view.set_line_endings('Unix')
@@ -234,6 +235,7 @@ class GidtermShell:
         )
         _set_terminal_mode(view)
         settings.set('gidterm_history', [])
+        settings.set('gidterm_pwd', [(view.size(), workdir)])
 
         # `cursor` is the location of the input cursor. It is often the end of
         # the doc but may be earlier if the LEFT key is used, or during
@@ -251,6 +253,16 @@ class GidtermShell:
         self.shell = Shell()
         self.shell.fork(workdir)
         sublime.set_timeout(self.loop, 100)
+
+    def set_title(self, s):
+        name = '{} {}'.format(self.pwd, s)
+        if len(name) > 20:
+            name = '\u2026{}'.format(name[-18:])
+        else:
+            alt = '{} {}'.format(os.path.expanduser(self.pwd), s)
+            if len(alt) <= 20:
+                name = alt
+        self.view.set_name(name)
 
     def send(self, s):
         self.shell.send(s)
@@ -495,6 +507,12 @@ class GidtermShell:
             col = view.rowcol(cursor)[1]
             if col != 0:
                 cursor = self.write(cursor, '\n')
+            if pwd != self.pwd:
+                history = settings.get('gidterm_pwd')
+                history.append((cursor, pwd))
+                settings.set('gidterm_pwd', history)
+                self.pwd = pwd
+            self.set_title(ps1)
             if self.out_start_time is not None:
                 # currently displaying output
                 if cursor > self.start_pos:
@@ -518,7 +536,6 @@ class GidtermShell:
                 self.scope = None
                 elapsed = timedelta_seconds(now - self.out_start_time)
                 cursor = self.write(cursor, ' {}\n'.format(elapsed))
-                view.set_name('{} [{}]'.format(os.path.basename(pwd), status))
                 # Reset the output timestamp to None so that
                 # pressing enter for a blank line does not show
                 # an updated time since run
@@ -530,13 +547,13 @@ class GidtermShell:
                     os.path.basename(virtualenv)
                 ))
                 extra_line = True
-            branch, status = get_vcs_branch(os.path.expanduser(pwd))
+            branch, state = get_vcs_branch(os.path.expanduser(pwd))
             if branch:
                 if extra_line:
                     cursor = self.write(cursor, ' ')
-                if status == 0:
+                if state == 0:
                     self.scope = 'sgr.green-on-default'
-                elif status == 1:
+                elif state == 1:
                     self.scope = 'sgr.yellow-on-default'
                 else:
                     self.scope = 'sgr.red-on-default'
@@ -833,7 +850,7 @@ class GidtermShell:
                 now = datetime.now(timezone.utc)
                 if self.out_start_time is not None:
                     elapsed = timedelta_seconds(now - self.out_start_time)
-                    self.view.set_name('{}'.format(elapsed))
+                    self.set_title(elapsed)
                 sublime.set_timeout(self.loop, 50)
             else:
                 try:
@@ -844,7 +861,7 @@ class GidtermShell:
                             elapsed = timedelta_seconds(
                                 now - self.out_start_time
                             )
-                            self.view.set_name('{}'.format(elapsed))
+                            self.set_title(elapsed)
                         self.handle_output(s, now)
                         sublime.set_timeout(self.loop, 1)
                     else:
