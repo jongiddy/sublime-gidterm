@@ -131,6 +131,7 @@
 {"keys": ["Y"], "command": "gidterm_input", "args": {"key": "Y"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["Z"], "command": "gidterm_input", "args": {"key": "Z"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["["], "command": "gidterm_input", "args": {"key": "["}, "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["\\"], "command": "gidterm_input", "args": {"key": "\\"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["]"], "command": "gidterm_input", "args": {"key": "]"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["^"], "command": "gidterm_input", "args": {"key": "^"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["_"], "command": "gidterm_input", "args": {"key": "_"}, "context": [{"key": "setting.is_gidterm"}]},
@@ -165,4 +166,7 @@
 {"keys": ["|"], "command": "gidterm_input", "args": {"key": "|"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["}"], "command": "gidterm_input", "args": {"key": "}"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["~"], "command": "gidterm_input", "args": {"key": "~"}, "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["€"], "command": "gidterm_input", "args": {"key": "€"}, "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["£"], "command": "gidterm_input", "args": {"key": "£"}, "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["¬"], "command": "gidterm_input", "args": {"key": "¬"}, "context": [{"key": "setting.is_gidterm"}]},
 ]
