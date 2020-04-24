@@ -40,19 +40,10 @@ export LINES=24
 # Avoid paging by using `cat` as the default pager.  This is generally nicer
 # because you can scroll and search using Sublime Text.  It's not so great for
 # `git log` where you typically only want the first page or two.  To fix this,
-# set the `GIT_PAGER` environment variable or the Git `core.pager`
-# config variable.  A good configuration for Git is:
+# set the Git `pager.log` config variable.  A good configuration for Git is:
 #    core.editor=/usr/bin/subl --wait
-#    core.pager=/bin/more
-# If you want simple `more` inside GidTerm but more features from `less`
-# outside GidTerm, then set `GIT_PAGER` in your profile:
-#    if [ "$TERM_PROGRAM" == "Sublime-GidTerm" ]; then
-#      export GIT_PAGER=/bin/more
-#    else
-#      export GIT_PAGER=/usr/bin/less
-#    fi
-#
-export PAGER=/bin/cat
+#    pager.log=/usr/bin/less --quit-if-one-screen
+export PAGER=cat
 
 # Don't add control commands to the history
 export HISTIGNORE=${HISTIGNORE:+${HISTIGNORE}:}'*# [@gidterm@]'
@@ -167,18 +158,17 @@ def get_vcs_branch(d):
         out = subprocess.check_output(
             ('git', 'branch', '--contains', 'HEAD'),
             cwd=d,
+            stderr=subprocess.STDOUT,
             universal_newlines=True,
         ).strip()
         lines = out.split('\n')
         branches = []
         for s in lines:
             if s[0] == '*':
-                branch = s.strip()
-            else:
-                branches.append(s)
-        if branches:
-            on = ','.join(s.strip() for s in branches)
-            branch = '{} on {}'.format(branch, on)
+                branch = s[1:].strip()
+                break
+        else:
+            return None, 0
         out = subprocess.check_output(
             ('git', 'status', '--porcelain', '--untracked-files=no'),
             cwd=d,
@@ -189,8 +179,14 @@ def get_vcs_branch(d):
                 # any other state apart from '  '
                 return branch, 2
         return branch, 0
+    except FileNotFoundError:
+        # git command not in path
+        pass
     except subprocess.CalledProcessError as e:
-        print(e)
+        if 'not a git repository' in e.output:
+            pass
+        else:
+            print('gidterm: [WARN] {}: {}'.format(e, e.output))
     return None, 0
 
 
