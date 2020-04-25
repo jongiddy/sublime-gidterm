@@ -214,16 +214,11 @@ class GidtermShell:
         self.set_title()
         settings = view.settings()
         view.set_scratch(True)
-        view.set_syntax_file('Packages/sublime-gidterm/gidterm.sublime-syntax')
         view.set_line_endings('Unix')
         view.set_read_only(True)
         settings = view.settings()
         settings.set('is_gidterm', True)
         settings.set('spell_check', False)
-        settings.set(
-            'color_scheme',
-            'Packages/sublime-gidterm/gidterm.sublime-color-scheme'
-        )
         settings.set('gidterm_history', [])
         settings.set('gidterm_pwd', [(view.size(), workdir)])
 
@@ -911,17 +906,33 @@ def _set_terminal_mode(view):
     view.set_status('gidterm_mode', 'Terminal mode')
 
 
+def _get_package_location(winvar):
+    packages = winvar['packages']
+    this_package = os.path.dirname(__file__)
+    assert this_package.startswith(packages)
+    unwanted = os.path.dirname(packages)
+    # add one to remove pathname delimiter /
+    return this_package[len(unwanted) + 1:]
+
+
 class GidtermCommand(sublime_plugin.TextCommand):
     def run(self, edit):
+        window = self.view.window()
+        winvar = window.extract_variables()
         filename = self.view.file_name()
         if filename is None:
-            cwd = os.environ['HOME']
+            pwd = winvar.get('folder', os.environ.get('HOME', '/'))
         else:
-            cwd = os.path.dirname(filename)
-        window = self.view.window()
+            pwd = os.path.dirname(filename)
+        package = _get_package_location(winvar)
         view = window.new_file()
+        view.set_syntax_file(os.path.join(package, 'gidterm.sublime-syntax'))
+        view.settings().set(
+            'color_scheme',
+            os.path.join(package, 'gidterm.sublime-color-scheme')
+        )
         window.focus_view(view)
-        GidtermShell(view, cwd)
+        GidtermShell(view, pwd)
 
 
 class GidtermInputCommand(sublime_plugin.TextCommand):
