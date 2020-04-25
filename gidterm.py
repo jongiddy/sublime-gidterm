@@ -876,17 +876,25 @@ class GidtermShell:
 
 
 def _set_browse_mode(view):
-    view.settings().set('gidterm_follow', False)
-    view.settings().set('block_caret', False)
-    view.settings().set('caret_style', 'blink')
-    view.set_status('gidterm_mode', 'Browse mode')
+    settings = view.settings()
+    follow = settings.get('gidterm_follow')
+    if follow:
+        settings.set('gidterm_follow', False)
+        settings.set('block_caret', False)
+        settings.set('caret_style', 'blink')
+        view.set_status('gidterm_mode', 'Browse mode')
+    return follow
 
 
 def _set_terminal_mode(view):
-    view.settings().set('gidterm_follow', True)
-    view.settings().set('block_caret', True)
-    view.settings().set('caret_style', 'solid')
-    view.set_status('gidterm_mode', 'Terminal mode')
+    settings = view.settings()
+    follow = settings.get('gidterm_follow')
+    if not follow:
+        settings.set('gidterm_follow', True)
+        settings.set('block_caret', True)
+        settings.set('caret_style', 'solid')
+        view.set_status('gidterm_mode', 'Terminal mode')
+    return not follow
 
 
 def _get_package_location(winvar):
@@ -923,8 +931,8 @@ class GidtermSendCommand(sublime_plugin.TextCommand):
     def run(self, edit, characters):
         shell = _shellmap.get(self.view.id())
         if shell:
-            _set_terminal_mode(self.view)
-            shell.move_cursor()
+            if _set_terminal_mode(self.view):
+                shell.move_cursor()
             shell.send(characters)
         else:
             print('disconnected')
@@ -965,6 +973,8 @@ class GidtermSendCapCommand(sublime_plugin.TextCommand):
             if seq is None:
                 print('unexpected terminal capability: {}'.format(cap))
             else:
+                if _set_terminal_mode(self.view):
+                    shell.move_cursor()
                 shell.send(seq)
         else:
             print('disconnected')
@@ -1031,8 +1041,7 @@ class GidtermInsertCommand(sublime_plugin.TextCommand):
         view = self.view
         shell = _shellmap.get(view.id())
         if shell:
-            if not view.settings().get('gidterm_follow'):
-                _set_terminal_mode(view)
+            if _set_terminal_mode(view):
                 shell.move_cursor()
             buf = sublime.get_clipboard()
             if strip:
@@ -1049,8 +1058,7 @@ class GidtermReplaceCommand(sublime_plugin.TextCommand):
         view = self.view
         shell = _shellmap.get(view.id())
         if shell:
-            if not view.settings().get('gidterm_follow'):
-                _set_terminal_mode(view)
+            if _set_terminal_mode(view):
                 shell.move_cursor()
             buf = sublime.get_clipboard().strip()
             if shell.in_lines is not None:
@@ -1067,8 +1075,7 @@ class GidtermDeleteCommand(sublime_plugin.TextCommand):
         view = self.view
         shell = _shellmap.get(view.id())
         if shell:
-            if not view.settings().get('gidterm_follow'):
-                _set_terminal_mode(view)
+            if _set_terminal_mode(view):
                 shell.move_cursor()
             if shell.in_lines is not None:
                 buf = '\b' * (view.size() - shell.start_pos)
