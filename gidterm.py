@@ -210,7 +210,8 @@ class GidtermShell:
     def __init__(self, view, workdir):
         self.view = view
         self.pwd = workdir
-        self.set_title('')
+        self.ps1 = '$'
+        self.set_title()
         settings = view.settings()
         view.set_scratch(True)
         view.set_syntax_file('Packages/sublime-gidterm/gidterm.sublime-syntax')
@@ -246,14 +247,21 @@ class GidtermShell:
         self.shell.fork(workdir)
         sublime.set_timeout(self.loop, 100)
 
-    def set_title(self, s):
-        name = '${} {}'.format(self.pwd, s)
-        if len(name) > 20:
-            name = '$\u2026{}'.format(name[-18:])
+    def set_title(self, s=''):
+        name = self.pwd
+        s = str(s)
+        if s:
+            name = '{} {}'.format(name, s)
+        if len(name) > 18:
+            name = '{}\u2026{}'.format(self.ps1, name[-17:])
         else:
-            alt = '${} {}'.format(os.path.expanduser(self.pwd), s)
+            alt = '{} {} {}'.format(
+                self.ps1, os.path.expanduser(self.pwd), s
+            ).rstrip()
             if len(alt) <= 20:
                 name = alt
+            else:
+                name = '{} {}'.format(self.ps1, name)
         self.view.set_name(name)
 
     def send(self, s):
@@ -503,6 +511,7 @@ class GidtermShell:
             # end prompt
             assert self.prompt_type == '1', self.prompt_type
             ps1, status, virtualenv, pwd = self.prompt_text.split('@', 3)
+            self.ps1 = ps1
             cursor = view.size()
             col = view.rowcol(cursor)[1]
             if col != 0:
@@ -512,7 +521,7 @@ class GidtermShell:
                 history.append((cursor, pwd))
                 settings.set('gidterm_pwd', history)
                 self.pwd = pwd
-            self.set_title('')
+            self.set_title()
             if self.out_start_time is not None:
                 # currently displaying output
                 if cursor > self.start_pos:
