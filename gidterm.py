@@ -162,7 +162,6 @@ def get_vcs_branch(d):
             universal_newlines=True,
         ).strip()
         lines = out.split('\n')
-        branches = []
         for s in lines:
             if s[0] == '*':
                 branch = s[1:].strip()
@@ -248,11 +247,11 @@ class GidtermShell:
         sublime.set_timeout(self.loop, 100)
 
     def set_title(self, s):
-        name = '{} {}'.format(self.pwd, s)
+        name = '${} {}'.format(self.pwd, s)
         if len(name) > 20:
-            name = '\u2026{}'.format(name[-18:])
+            name = '$\u2026{}'.format(name[-18:])
         else:
-            alt = '{} {}'.format(os.path.expanduser(self.pwd), s)
+            alt = '${} {}'.format(os.path.expanduser(self.pwd), s)
             if len(alt) <= 20:
                 name = alt
         self.view.set_name(name)
@@ -306,6 +305,7 @@ class GidtermShell:
             end = start + len(text)
             region = sublime.Region(start, end)
             sel = view.sel()
+            regions = [r for r in sel]
             sel.clear()
             sel.add(region)
             view.set_read_only(False)
@@ -313,6 +313,8 @@ class GidtermShell:
                 view.run_command('insert', {'characters': text})
             finally:
                 view.set_read_only(True)
+            sel.clear()
+            sel.add_all(regions)
 
         if self.scope is not None:
             regions = view.get_regions(self.scope)
@@ -510,7 +512,7 @@ class GidtermShell:
                 history.append((cursor, pwd))
                 settings.set('gidterm_pwd', history)
                 self.pwd = pwd
-            self.set_title(ps1)
+            self.set_title('')
             if self.out_start_time is not None:
                 # currently displaying output
                 if cursor > self.start_pos:
@@ -760,8 +762,14 @@ class GidtermShell:
                 n = int(arg)
             else:
                 n = 1
-            self.cursor = min(self.cursor + n, view.size())
-            self.move_cursor()
+            n = min(n, view.size() - self.cursor)
+            self.cursor += n
+            # Use the `move` command because `self.move_cursor` does nothing if
+            # we just change the value of `self.cursor` without changing text.
+            for i in range(n):
+                view.run_command(
+                    'move', {"by": "characters", "forward": True}
+                )
             return
         elif command == 'D':
             # left
@@ -770,8 +778,14 @@ class GidtermShell:
                 n = int(arg)
             else:
                 n = 1
-            self.cursor = max(self.cursor - n, 0)
-            self.move_cursor()
+            self.cursor = max(n, self.cursor)
+            self.cursor -= n
+            # Use the `move` command because `self.move_cursor` does nothing if
+            # we just change the value of `self.cursor` without changing text.
+            for i in range(n):
+                view.run_command(
+                    'move', {"by": "characters", "forward": False}
+                )
             return
         elif command == 'K':
             arg = part[2:-1]
@@ -1106,7 +1120,6 @@ class GidtermMoveToCommand(sublime_plugin.TextCommand):
                     return
             # Set to current command
             _set_terminal_mode(view)
-            self.move_cursor()
             shell = _shellmap.get(view.id())
             if shell:
                 shell.move_cursor()
