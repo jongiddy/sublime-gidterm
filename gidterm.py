@@ -918,71 +918,54 @@ class GidtermCommand(sublime_plugin.TextCommand):
         GidtermShell(view, pwd)
 
 
-class GidtermInputCommand(sublime_plugin.TextCommand):
+class GidtermSendCommand(sublime_plugin.TextCommand):
 
-    def run(self, edit, key):
+    def run(self, edit, characters):
         shell = _shellmap.get(self.view.id())
         if shell:
             _set_terminal_mode(self.view)
             shell.move_cursor()
-            shell.send(key)
+            shell.send(characters)
         else:
             print('disconnected')
             _set_browse_mode(self.view)
 
 
-_follow_map = {
-    'escape': '\x1b\x1b',
-    'up': '\x1b[A',
-    'down': '\x1b[B',
-    'right': '\x1b[C',
-    'left': '\x1b[D',
-    'ctrl+@': '\x00',
-    'ctrl+a': '\x01',
-    'ctrl+b': '\x02',
-    'ctrl+c': '\x03',
-    'ctrl+d': '\x04',
-    'ctrl+e': '\x05',
-    'ctrl+f': '\x06',
-    'ctrl+g': '\x07',
-    'ctrl+h': '\x08',
-    'ctrl+i': '\x09',
-    'ctrl+j': '\x10',
-    'ctrl+k': '\x11',
-    'ctrl+l': '\x12',
-    'ctrl+m': '\x13',
-    'ctrl+n': '\x14',
-    'ctrl+o': '\x15',
-    'ctrl+p': '\x16',
-    'ctrl+q': '\x17',
-    'ctrl+r': '\x18',
-    'ctrl+s': '\x19',
-    'ctrl+t': '\x20',
-    'ctrl+u': '\x21',
-    'ctrl+v': '\x22',
-    'ctrl+w': '\x23',
-    'ctrl+x': '\x24',
-    'ctrl+y': '\x25',
-    'ctrl+z': '\x26',
+_terminal_capability_map = {
+    'cr': '\r',             # CR
+    'esc': '\x1b\x1b',      # escape
+    'ht': '\t',             # tab
+    'kbs': '\b',            # backspace
+    'kcbt': '\x1b[Z',       # shift-tab
+    'kcuu1': '\x1b[A',      # cursor-up
+    'kcud1': '\x1b[B',      # cursor-down
+    'kcuf1': '\x1b[C',      # cursor-right
+    'kcub1': '\x1b[D',      # cursor-left
+    'kDC': '\x1b[P',        # shift-delete
+    'kdch1': '\x1b[3~',     # delete
+    'kEND': '',             # shift-end
+    'kich1': '\x1b[L',      # insert
+    'kHOM': '',             # shift-home
+    'khome': '\x1b[H',      # home
+    'kLFT': '',             # shift-cursor-left
+    'knp': '',              # next-page
+    'kpp': '',              # previous-page
+    'kRIT': '',             # shift-cursor-right
+    'nel': '\r\x1b[S',      # newline
 }
 
 
-class GidtermFollowingCommand(sublime_plugin.TextCommand):
+class GidtermSendCapCommand(sublime_plugin.TextCommand):
 
-    def run(self, edit, key):
+    def run(self, edit, cap):
         view = self.view
         shell = _shellmap.get(view.id())
         if shell:
-            if key == 'insert':
-                buf = sublime.get_clipboard()
-                if buf:
-                    shell.send(buf)
+            seq = _terminal_capability_map.get(cap)
+            if seq is None:
+                print('unexpected terminal capability: {}'.format(cap))
             else:
-                s = _follow_map.get(key)
-                if s is None:
-                    print('unexpected follow key: {}'.format(key))
-                else:
-                    shell.send(s)
+                shell.send(seq)
         else:
             print('disconnected')
             _set_browse_mode(view)
@@ -1023,10 +1006,10 @@ _follow_escape = {
             'move_to', {"to": "eof", "extend": True}
         ),
     'shift+ctrl+pageup': lambda view: view.run_command(
-            'gidterm_move_to', {"forward": False}
+            'gidterm_select', {"forward": False}
         ),
     'shift+ctrl+pagedown': lambda view: view.run_command(
-            'gidterm_move_to', {"forward": True}
+            'gidterm_select', {"forward": True}
         ),
 }
 
@@ -1054,8 +1037,7 @@ class GidtermInsertCommand(sublime_plugin.TextCommand):
             buf = sublime.get_clipboard()
             if strip:
                 buf = buf.strip()
-            if buf:
-                shell.send(buf)
+            shell.send(buf)
         else:
             print('disconnected')
             _set_browse_mode(view)
@@ -1073,8 +1055,7 @@ class GidtermReplaceCommand(sublime_plugin.TextCommand):
             buf = sublime.get_clipboard().strip()
             if shell.in_lines is not None:
                 buf = '\b' * (view.size() - shell.start_pos) + buf
-            if buf:
-                shell.send(buf)
+            shell.send(buf)
         else:
             print('disconnected')
             _set_browse_mode(view)
@@ -1091,14 +1072,13 @@ class GidtermDeleteCommand(sublime_plugin.TextCommand):
                 shell.move_cursor()
             if shell.in_lines is not None:
                 buf = '\b' * (view.size() - shell.start_pos)
-            if buf:
-                shell.send(buf)
+            shell.send(buf)
         else:
             print('disconnected')
             _set_browse_mode(view)
 
 
-class GidtermMoveToCommand(sublime_plugin.TextCommand):
+class GidtermSelectCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, forward):
         view = self.view
