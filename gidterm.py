@@ -219,7 +219,7 @@ class GidtermShell:
         settings = view.settings()
         settings.set('is_gidterm', True)
         settings.set('spell_check', False)
-        settings.set('gidterm_history', [])
+        settings.set('gidterm_command_history', [])
         settings.set('gidterm_pwd', [(view.size(), workdir)])
 
         # `cursor` is the location of the input cursor. It is often the end of
@@ -413,17 +413,6 @@ class GidtermShell:
                         self.prompt_text += part
             else:
                 self.handle_control(now, part)
-        if self.out_start_time:
-            # currently displaying output
-            out_stop_pos = self.cursor
-            if out_stop_pos > self.start_pos:
-                settings = self.view.settings()
-                history = settings.get('gidterm_history')
-                history.append(
-                    (0, [(self.start_pos, out_stop_pos)], now.timestamp())
-                )
-                settings.set('gidterm_history', history)
-                self.start_pos = out_stop_pos
 
     def handle_control(self, now, part):
         view = self.view
@@ -474,13 +463,11 @@ class GidtermShell:
                     self.in_lines.append(
                         (self.start_pos, in_end_pos + 1)
                     )
-                    history = settings.get('gidterm_history')
-                    history.append(
-                        (1, self.in_lines, ts)
-                    )
-                    settings.set('gidterm_history', history)
+                    history = settings.get('gidterm_command_history')
+                    history.append(self.in_lines)
+                    settings.set('gidterm_command_history', history)
                     self.in_lines = None
-                    self.cursor = self.start_pos = view.size()
+                    self.cursor = view.size()
                     self.move_cursor()
                     self.out_start_time = now
                     return
@@ -518,11 +505,7 @@ class GidtermShell:
                 self.pwd = pwd
             self.set_title()
             if self.out_start_time is not None:
-                # currently displaying output
-                if cursor > self.start_pos:
-                    history = settings.get('gidterm_history')
-                    history.append((0, [(self.start_pos, cursor)], ts))
-                    settings.set('gidterm_history', history)
+                # just finished displaying output
                 if status == '0':
                     self.scope = 'sgr.green-on-default'
                 else:
@@ -1121,21 +1104,21 @@ class GidtermMoveToCommand(sublime_plugin.TextCommand):
         view = self.view
         settings = view.settings()
         sel = view.sel()
-        history = settings.get('gidterm_history')
+        history = settings.get('gidterm_command_history')
         if forward is True:
             pos = sel[0].end()
             size = len(history)
             index = size // 2
-            while history and history[index][1][0][0] < pos:
+            while history and history[index][0][0] < pos:
                 history = history[index + 1:]
                 size = len(history)
                 index = size // 2
 
             for entry in history:
-                if entry[0] == 1 and entry[1][0][0] > pos:
+                if entry[0][0] > pos:
                     sel = view.sel()
                     sel.clear()
-                    sel.add_all([sublime.Region(b, e) for (b, e) in entry[1]])
+                    sel.add_all([sublime.Region(b, e) for (b, e) in entry])
                     view.show(sel)
                     return
             # Set to current command
@@ -1153,16 +1136,16 @@ class GidtermMoveToCommand(sublime_plugin.TextCommand):
             pos = sel[0].begin()
             size = len(history)
             index = size // 2
-            while history and history[index][1][-1][1] > pos:
+            while history and history[index][-1][1] > pos:
                 history = history[:index]
                 size = len(history)
                 index = size // 2
 
             for entry in reversed(history):
-                if entry[0] == 1 and entry[1][-1][1] < pos:
+                if entry[-1][1] < pos:
                     sel = view.sel()
                     sel.clear()
-                    sel.add_all([sublime.Region(b, e) for (b, e) in entry[1]])
+                    sel.add_all([sublime.Region(b, e) for (b, e) in entry])
                     view.show(sel)
                     return
 
