@@ -141,11 +141,12 @@ class TestGidTermLoop(TestCase):
 
     def test_echo(self):
         self.wait_for_prompt()
+        self.assertTerminalMode()
         c0 = self.single_cursor()
-        self.send_command('echo Hello World!')
+        command = 'echo Hello World!'
+        self.send_command(command)
         c1 = self.single_cursor()
-        command = self.view.substr(sublime.Region(c0, c1))
-        self.assertEqual('echo Hello World!', command)
+        self.assertEqual(command, self.view.substr(sublime.Region(c0, c1)))
         self.wait_for_prompt()
         c2 = self.single_cursor()
         output = self.view.substr(sublime.Region(c1, c2))
@@ -153,6 +154,25 @@ class TestGidTermLoop(TestCase):
             output.startswith('\nHello World!\n'),
             repr(self.all_contents())
         )
+        self.assertTerminalMode()
+
+    def test_extra_whitespace(self):
+        self.wait_for_prompt()
+        self.assertTerminalMode()
+        c0 = self.single_cursor()
+        command = '  echo  Hello  World!  '
+        self.send_command(command)
+        c1 = self.single_cursor()
+        self.assertEqual(command, self.view.substr(sublime.Region(c0, c1)))
+        self.wait_for_prompt()
+        c1 -= 2  # GidTerm will remove the trailing spaces
+        c2 = self.single_cursor()
+        output = self.view.substr(sublime.Region(c1, c2))
+        self.assertTrue(
+            output.startswith('\nHello World!\n'),
+            (output, self.all_contents(), c1)
+        )
+        self.assertTerminalMode()
 
     def test_terminal_mode_home(self):
         """
