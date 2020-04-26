@@ -1024,6 +1024,14 @@ _follow_escape = {
     'shift+end': lambda view: view.run_command(
             'move_to', {"to": "eol", "extend": True}
         ),
+    'shift+pagedown':
+        lambda view: view.run_command(
+            'move', {"by": "pages", "forward": True, "extend": True}
+        ),
+    'shift+pageup':
+        lambda view: view.run_command(
+            'move', {"by": "pages", "forward": False, "extend": True}
+        ),
     'shift+ctrl+home': lambda view: view.run_command(
             'move_to', {"to": "bof", "extend": True}
         ),
