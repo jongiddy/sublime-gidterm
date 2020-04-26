@@ -101,7 +101,7 @@ class Shell:
             os.unlink(self.path)
             self.path = None
         if self.pid is not None:
-            pid, status = os.waitpid(self.pid, os.WNOHANG)
+            pid, status = os.waitpid(self.pid, 0)
             if os.WIFEXITED(status) or os.WIFSIGNALED(status):
                 self.pid = None
 
@@ -221,7 +221,13 @@ class GidtermShell:
         settings.set('spell_check', False)
         settings.set('gidterm_command_history', [])
         settings.set('gidterm_pwd', [(view.size(), workdir)])
-
+        winvar = view.window().extract_variables()
+        package = _get_package_location(winvar)
+        view.set_syntax_file(os.path.join(package, 'gidterm.sublime-syntax'))
+        settings.set(
+            'color_scheme',
+            os.path.join(package, 'gidterm.sublime-color-scheme')
+        )
         # `cursor` is the location of the input cursor. It is often the end of
         # the doc but may be earlier if the LEFT key is used, or during
         # command history rewriting.
@@ -239,8 +245,11 @@ class GidtermShell:
         self.move_cursor()
 
         self.shell = Shell()
-        self.shell.fork(workdir)
-        sublime.set_timeout(self.loop, 100)
+
+    def start(self, wait):
+        self.shell.fork(self.pwd)
+        if wait is not None:
+            sublime.set_timeout(self.loop, wait)
 
     def set_title(self, s=''):
         name = self.pwd
@@ -259,8 +268,14 @@ class GidtermShell:
                 name = '{} {}'.format(self.ps1, name)
         self.view.set_name(name)
 
+    def at_prompt(self):
+        return self.in_lines is not None and self.cursor == self.start_pos
+
     def send(self, s):
         self.shell.send(s)
+
+    def close(self):
+        self.shell.close()
 
     def insert(self, start, text):
         view = self.view
@@ -416,7 +431,6 @@ class GidtermShell:
 
     def handle_control(self, now, part):
         view = self.view
-        ts = now.timestamp()
         if part == '\x07':
             return
         if part[0] == '\x08':
@@ -843,36 +857,42 @@ class GidtermShell:
         self.cursor = self.write(self.cursor, part)
         self.move_cursor()
 
-    def loop(self):
+    def once(self):
         if _shellmap.get(self.view.id()) == self:
             if not self.shell.ready():
                 now = datetime.now(timezone.utc)
                 if self.out_start_time is not None:
                     elapsed = timedelta_seconds(now - self.out_start_time)
                     self.set_title(elapsed)
+                return False
+            else:
+                s = self.shell.receive()
+                if s:
+                    now = datetime.now(timezone.utc)
+                    if self.out_start_time is not None:
+                        elapsed = timedelta_seconds(
+                            now - self.out_start_time
+                        )
+                        self.set_title(elapsed)
+                    self.handle_output(s, now)
+                    return True
+        return None
+
+    def loop(self):
+        try:
+            next = self.once()
+            if next is True:
+                sublime.set_timeout(self.loop, 1)
+            elif next is False:
                 sublime.set_timeout(self.loop, 50)
             else:
-                try:
-                    s = self.shell.receive()
-                    if s:
-                        now = datetime.now(timezone.utc)
-                        if self.out_start_time is not None:
-                            elapsed = timedelta_seconds(
-                                now - self.out_start_time
-                            )
-                            self.set_title(elapsed)
-                        self.handle_output(s, now)
-                        sublime.set_timeout(self.loop, 1)
-                    else:
-                        self.shell.close()
-                        _set_browse_mode(self.view)
-                except OSError:
-                    self.shell.close()
-                    _set_browse_mode(self.view)
-                    raise
-        else:
-            self.shell.close()
+                assert next is None, next
+                self.close()
+                _set_browse_mode(self.view)
+        except Exception:
+            self.close()
             _set_browse_mode(self.view)
+            raise
 
 
 def _set_browse_mode(view):
@@ -915,15 +935,10 @@ class GidtermCommand(sublime_plugin.TextCommand):
             pwd = winvar.get('folder', os.environ.get('HOME', '/'))
         else:
             pwd = os.path.dirname(filename)
-        package = _get_package_location(winvar)
         view = window.new_file()
-        view.set_syntax_file(os.path.join(package, 'gidterm.sublime-syntax'))
-        view.settings().set(
-            'color_scheme',
-            os.path.join(package, 'gidterm.sublime-color-scheme')
-        )
         window.focus_view(view)
-        GidtermShell(view, pwd)
+        s = GidtermShell(view, pwd)
+        s.start(100)
 
 
 class GidtermSendCommand(sublime_plugin.TextCommand):
