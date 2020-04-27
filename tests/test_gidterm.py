@@ -62,24 +62,7 @@ class TestTimeDeltaSeconds(TestCase):
         )
 
 
-class TestGidTermLoop(TestCase):
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
-        self.view = sublime.active_window().new_file()
-        self.shell = gidterm.GidtermShell(self.view, self.tmpdir)
-        self.shell.start(None)
-        # make sure we have a window to work with
-        s = sublime.load_settings("Preferences.sublime-settings")
-        s.set("close_windows_when_empty", False)
-
-    def tearDown(self):
-        self.shell.close()
-        if self.view:
-            self.view.set_scratch(True)
-            self.view.window().focus_view(self.view)
-            self.view.window().run_command("close_file")
-        shutil.rmtree(self.tmpdir)
+class GidTermTestHelper:
 
     def all_contents(self):
         return self.view.substr(sublime.Region(0, self.view.size()))
@@ -95,45 +78,66 @@ class TestGidTermLoop(TestCase):
         self.assertTrue(region.empty())
         return region.begin()
 
-    def wait_for_prompt(self, timeout=5):
-        start = time.time()
-        self.shell.once()
-        while not self.shell.at_prompt():
-            if time.time() - start > timeout:
-                raise TimeoutError()
-            time.sleep(0.1)
-            self.shell.once()
-
-    def wait_for_idle(self, timeout=5):
-        start = time.time()
-        while self.shell.once():
-            if time.time() - start > timeout:
-                raise TimeoutError()
-
-    def send_command(self, command):
-        self.assertTrue(self.shell.at_prompt())
-        self.shell.send(command)
-        # give the shell time to echo command
-        time.sleep(0.1)
-        self.wait_for_idle()
-        self.shell.send(gidterm._terminal_capability_map['cr'])
-
     def assertBrowseMode(self):
         self.assertFalse(self.view.settings().get('gidterm_follow'))
 
     def assertTerminalMode(self):
         self.assertTrue(self.view.settings().get('gidterm_follow'))
 
+
+class TestGidTermOnce(TestCase, GidTermTestHelper):
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.view = sublime.active_window().new_file()
+        self.gview = gidterm.GidtermView(self.view.id(), self.tmpdir)
+        gidterm._viewmap[self.view.id()] = self.gview
+        self.gview.start(None)
+        # make sure we have a window to work with
+        s = sublime.load_settings("Preferences.sublime-settings")
+        s.set("close_windows_when_empty", False)
+
+    def tearDown(self):
+        self.gview.close()
+        if self.view:
+            self.view.set_scratch(True)
+            self.view.window().focus_view(self.view)
+            self.view.window().run_command("close_file")
+        shutil.rmtree(self.tmpdir)
+
+    def wait_for_prompt(self, timeout=5):
+        start = time.time()
+        self.gview.once()
+        while not self.gview.at_prompt():
+            if time.time() - start > timeout:
+                raise TimeoutError()
+            time.sleep(0.1)
+            self.gview.once()
+
+    def wait_for_idle(self, timeout=5):
+        start = time.time()
+        while self.gview.once():
+            if time.time() - start > timeout:
+                raise TimeoutError()
+
+    def send_command(self, command):
+        self.assertTrue(self.gview.at_prompt())
+        self.gview.send(command)
+        # give the shell time to echo command
+        time.sleep(0.1)
+        self.wait_for_idle()
+        self.gview.send(gidterm._terminal_capability_map['cr'])
+
     def test_at_prompt(self):
         self.wait_for_prompt()
-        self.assertTrue(self.shell.at_prompt())
+        self.assertTrue(self.gview.at_prompt())
         end = self.view.size()
         last = self.view.substr(sublime.Region(end - 3, end))
         self.assertEqual('\n$ ', last, repr(last))
         self.send_command('sleep 1')
         time.sleep(0.2)
-        self.shell.once()
-        self.assertFalse(self.shell.at_prompt())
+        self.gview.once()
+        self.assertFalse(self.gview.at_prompt())
 
     def test_initial_state(self):
         self.wait_for_prompt()
@@ -396,7 +400,6 @@ class TestGidTermLoop(TestCase):
         self.view.run_command("gidterm_escape", {"key": "shift+ctrl+pageup"})
         region = self.single_selection()
         self.assertEqual(cmd0_begin, region.begin())
-        # add one because we select the final newline as well
         self.assertEqual(cmd0_end, region.end())
         # At first command, Ctrl-Shift-PageUp stays on first command
         self.view.run_command("gidterm_escape", {"key": "shift+ctrl+pageup"})
@@ -417,3 +420,64 @@ class TestGidTermLoop(TestCase):
         self.view.run_command("gidterm_escape", {"key": "shift+ctrl+pagedown"})
         self.assertTerminalMode()
         self.assertEqual(cmd2_prompt, self.single_cursor())
+
+
+class TestGidTermLoop(TestCase, GidTermTestHelper):
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.view = sublime.active_window().new_file()
+        self.gview = gidterm.GidtermView(self.view.id(), self.tmpdir)
+        gidterm._viewmap[self.view.id()] = self.gview
+        self.gview.start(50)
+        # make sure we have a window to work with
+        s = sublime.load_settings("Preferences.sublime-settings")
+        s.set("close_windows_when_empty", False)
+
+    def tearDown(self):
+        self.gview.close()
+        if self.view:
+            self.view.set_scratch(True)
+            self.view.window().focus_view(self.view)
+            self.view.window().run_command("close_file")
+        shutil.rmtree(self.tmpdir)
+
+    def wait_for_prompt(self, timeout=5):
+        start = time.time()
+        while not self.gview.at_prompt():
+            if time.time() - start > timeout:
+                raise TimeoutError()
+            time.sleep(0.1)
+
+    def send_command(self, command):
+        self.view.run_command('gidterm_send', {'characters': command})
+        self.view.run_command('gidterm_send_cap', {'cap': 'cr'})
+
+    def test_disconnect(self):
+        """
+        Disconnection puts editor in browse mode. Performing a terminal
+        action starts a new shell.
+        """
+        self.wait_for_prompt()
+        self.assertTerminalMode()
+        self.view.run_command('gidterm_send', {'characters': '\x04'})  # Ctrl-D
+        time.sleep(0.2)
+        self.view.run_command('gidterm_send', {'characters': 'e'})
+        time.sleep(0.2)
+        self.assertBrowseMode()
+        self.view.run_command('gidterm_send_cap', {'cap': 'cr'})
+        self.wait_for_prompt()
+        self.assertTerminalMode()
+        command = 'echo hello'
+        c1 = self.single_cursor()
+        self.send_command(command)
+        time.sleep(0.2)
+        self.wait_for_prompt()
+        c2 = self.single_cursor()
+        output = self.view.substr(sublime.Region(c1, c2))
+        self.assertTrue(
+            'echo hello\nhello\n' in output,
+            repr((output, self.all_contents(), c1))
+        )
+        self.assertTerminalMode()
+        self.assertEqual(self.tmpdir, self.gview.pwd)
