@@ -436,11 +436,11 @@ class GidtermView(sublime.View):
                 if part:
                     if self.prompt_type is None:
                         self.cursor = self.write(self.cursor, part)
-                        self.move_cursor()
                     else:
                         self.prompt_text += part
             else:
                 self.handle_control(now, part)
+        self.move_cursor()
 
     def handle_control(self, now, part):
         if part == '\x07':
@@ -450,12 +450,10 @@ class GidtermView(sublime.View):
             if n > self.cursor:
                 n = self.cursor
             self.cursor = self.cursor - n
-            self.move_cursor()
             return
         if part[0] == '\r':
             if part[-1] == '\n':
                 self.cursor = self.write(self.size(), '\n')
-                self.move_cursor()
             else:
                 # move cursor to start of line
                 classification = self.classify(self.cursor)
@@ -466,7 +464,6 @@ class GidtermView(sublime.View):
                         classes=sublime.CLASS_LINE_START
                     )
                     self.cursor = bol
-                    self.move_cursor()
             return
         settings = self.settings()
         command = part[-1]
@@ -494,7 +491,6 @@ class GidtermView(sublime.View):
                     settings.set('gidterm_command_history', history)
                     self.in_lines = None
                     self.cursor = self.size()
-                    self.move_cursor()
                     self.out_start_time = now
                     return
                 elif prompt_type == '2':
@@ -508,7 +504,6 @@ class GidtermView(sublime.View):
                     self.cursor = self.write(self.cursor, '> ')
                     self.scope = None
                     self.start_pos = self.cursor
-                    self.move_cursor()
                     return
             else:
                 assert self.prompt_type is None, self.prompt_type
@@ -584,7 +579,6 @@ class GidtermView(sublime.View):
             self.scope = None
             self.start_pos = self.cursor
             self.in_lines = []
-            self.move_cursor()
             self.prompt_type = None
             return
         elif command == 'm':
@@ -812,7 +806,6 @@ class GidtermView(sublime.View):
                         classes=sublime.CLASS_LINE_END
                     )
                     self.erase(self.cursor, eol)
-                    self.move_cursor()
                 return
             elif arg == '1':
                 # clear to start of line
@@ -845,7 +838,6 @@ class GidtermView(sublime.View):
                         classes=sublime.CLASS_LINE_END
                     )
                 self.erase(bol, eol)
-                self.move_cursor()
                 return
         elif command == 'P':
             # delete n
@@ -862,11 +854,9 @@ class GidtermView(sublime.View):
             if col != 0:
                 pos = self.write(pos, '\n')
             self.cursor = pos
-            self.move_cursor()
             return
         print('gidterm: [WARN] unknown control: {!r}'.format(part))
         self.cursor = self.write(self.cursor, part)
-        self.move_cursor()
 
     def once(self):
         if self.shell is not None:
