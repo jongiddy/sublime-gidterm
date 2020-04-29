@@ -316,12 +316,11 @@ class GidtermView(sublime.View):
             )
             end = self.size()
         else:
-            sel = self.sel()
-            sel.clear()
-            sel.add(start)
             self.set_read_only(False)
             try:
-                self.run_command('insert', {'characters': text})
+                self.run_command(
+                    'gidterm_insert_text', {'point': start, 'characters': text}
+                )
             finally:
                 self.set_read_only(True)
             end = start + len(text)
@@ -350,18 +349,14 @@ class GidtermView(sublime.View):
             end = self.size()
         else:
             end = start + len(text)
-            region = sublime.Region(start, end)
-            sel = self.sel()
-            regions = [r for r in sel]
-            sel.clear()
-            sel.add(region)
             self.set_read_only(False)
             try:
-                self.run_command('insert', {'characters': text})
+                self.run_command(
+                    'gidterm_replace_text',
+                    {'begin': start, 'end': end, 'characters': text}
+                )
             finally:
                 self.set_read_only(True)
-            sel.clear()
-            sel.add_all(regions)
 
         if self.scope is not None:
             regions = self.get_regions(self.scope)
@@ -386,25 +381,29 @@ class GidtermView(sublime.View):
             sel.add(self.cursor)
             self.show(self.cursor)
 
-    def erase(self, region):
-        length = region.size()
+    def erase(self, begin, end):
+        length = end - begin
         if length > 0:
-            sel = self.sel()
-            sel.clear()
-            sel.add(region)
             self.set_read_only(False)
             try:
-                self.run_command('insert', {'characters': ' ' * length})
+                self.run_command(
+                    'gidterm_replace_text',
+                    {
+                        'begin': begin,
+                        'end': end,
+                        'characters': ' ' * length,
+                    }
+                )
             finally:
                 self.set_read_only(True)
 
-    def delete(self, region):
-        if not region.empty():
-            sel = self.sel()
-            sel.clear()
-            sel.add(region)
+    def delete(self, begin, end):
+        if begin < end:
             self.set_read_only(False)
-            self.run_command("left_delete")
+            self.run_command(
+                'gidterm_erase_text',
+                {'begin': begin, 'end': end},
+            )
             self.set_read_only(True)
 
     def at_cursor(self):
@@ -495,7 +494,7 @@ class GidtermView(sublime.View):
                     in_end_pos = end
                     while self.substr(in_end_pos - 1) == ' ':
                         in_end_pos -= 1
-                    self.delete(sublime.Region(in_end_pos, end))
+                    self.delete(in_end_pos, end)
                     # update history
                     assert self.substr(in_end_pos) == '\n'
                     self.in_lines.append(
@@ -823,7 +822,7 @@ class GidtermView(sublime.View):
                         forward=True,
                         classes=sublime.CLASS_LINE_END
                     )
-                    self.erase(sublime.Region(self.cursor, eol))
+                    self.erase(self.cursor, eol)
                     self.move_cursor()
                 return
             elif arg == '1':
@@ -835,7 +834,7 @@ class GidtermView(sublime.View):
                         forward=False,
                         classes=sublime.CLASS_LINE_START
                     )
-                    self.erase(sublime.Region(bol, self.cursor))
+                    self.erase(bol, self.cursor)
                 return
             elif arg == '2':
                 # clear line
@@ -856,15 +855,14 @@ class GidtermView(sublime.View):
                         forward=True,
                         classes=sublime.CLASS_LINE_END
                     )
-                self.erase(sublime.Region(bol, eol))
+                self.erase(bol, eol)
                 self.move_cursor()
                 return
         elif command == 'P':
             # delete n
             n = int(part[2:-1])
             end = self.cursor + n
-            region = sublime.Region(self.cursor, end)
-            self.delete(region)
+            self.delete(self.cursor, end)
             return
         elif command in ('A', 'B', 'E', 'F', 'G', 'H', 'J', 'f'):
             # we don't handle other cursor movements, since we lie
@@ -951,6 +949,23 @@ def _get_package_location(winvar):
     unwanted = os.path.dirname(packages)
     # add one to remove pathname delimiter /
     return this_package[len(unwanted) + 1:]
+
+
+class GidtermInsertTextCommand(sublime_plugin.TextCommand):
+    def run(self, edit, point, characters):
+        self.view.insert(edit, point, characters)
+
+
+class GidtermReplaceTextCommand(sublime_plugin.TextCommand):
+    def run(self, edit, begin, end, characters):
+        region = sublime.Region(begin, end)
+        self.view.replace(edit, region, characters)
+
+
+class GidtermEraseTextCommand(sublime_plugin.TextCommand):
+    def run(self, edit, begin, end):
+        region = sublime.Region(begin, end)
+        self.view.erase(edit, region)
 
 
 class GidtermCommand(sublime_plugin.TextCommand):
