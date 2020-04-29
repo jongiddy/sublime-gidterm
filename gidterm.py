@@ -210,31 +210,13 @@ class GidtermView(sublime.View):
         r'\x1b(\[[\x30-\x3f]*[\x20-\x2f]*)?$'           # CSI
     )
 
-    def __init__(self, view_id, workdir=None):
+    def __init__(self, view_id):
         super().__init__(view_id)
-        self.set_scratch(True)
-        self.set_line_endings('Unix')
-        self.set_read_only(True)
-        winvar = self.window().extract_variables()
-        package = _get_package_location(winvar)
-        self.set_syntax_file(os.path.join(package, 'gidterm.sublime-syntax'))
-        if workdir is None:
-            workdir = winvar.get('folder', os.environ.get('HOME', '/'))
-        self.pwd = workdir
+        history = self.settings().get('gidterm_pwd')
+        self.pwd = history[-1][1]
         self.ps1 = '$'
         self.set_title()
-        settings = self.settings()
-        settings.set(
-            'color_scheme',
-            os.path.join(package, 'gidterm.sublime-color-scheme')
-        )
-        # prevent ST doing work that doesn't help here
-        settings.set('mini_diff', False)
-        settings.set('spell_check', False)
-        # state
-        settings.set('is_gidterm', True)
-        settings.set('gidterm_command_history', [])
-        settings.set('gidterm_pwd', [(self.size(), workdir)])
+
         # `cursor` is the location of the input cursor. It is often the end of
         # the doc but may be earlier if the LEFT key is used, or during
         # command history rewriting.
@@ -921,15 +903,6 @@ def _set_terminal_mode(view):
     return not follow
 
 
-def _get_package_location(winvar):
-    packages = winvar['packages']
-    this_package = os.path.dirname(__file__)
-    assert this_package.startswith(packages)
-    unwanted = os.path.dirname(packages)
-    # add one to remove pathname delimiter /
-    return this_package[len(unwanted) + 1:]
-
-
 class GidtermInsertTextCommand(sublime_plugin.TextCommand):
     def run(self, edit, point, characters):
         self.view.insert(edit, point, characters)
@@ -947,18 +920,53 @@ class GidtermEraseTextCommand(sublime_plugin.TextCommand):
         self.view.erase(edit, region)
 
 
+def _get_package_location(winvar):
+    packages = winvar['packages']
+    this_package = os.path.dirname(__file__)
+    assert this_package.startswith(packages)
+    unwanted = os.path.dirname(packages)
+    # add one to remove pathname delimiter /
+    return this_package[len(unwanted) + 1:]
+
+
+def create_view(window, pwd):
+    winvar = window.extract_variables()
+    package = _get_package_location(winvar)
+    if pwd is None:
+        pwd = winvar.get('folder', os.environ.get('HOME', '/'))
+    view = window.new_file()
+    view.set_line_endings('Unix')
+    view.set_read_only(True)
+    view.set_scratch(True)
+    view.set_syntax_file(os.path.join(package, 'gidterm.sublime-syntax'))
+    settings = view.settings()
+    settings.set(
+        'color_scheme',
+        os.path.join(package, 'gidterm.sublime-color-scheme')
+    )
+    # prevent ST doing work that doesn't help here
+    settings.set('mini_diff', False)
+    settings.set('spell_check', False)
+    # state
+    settings.set('is_gidterm', True)
+    settings.set('gidterm_command_history', [])
+    settings.set('gidterm_pwd', [(0, pwd)])
+    return view
+
+
 class GidtermCommand(sublime_plugin.TextCommand):
     def run(self, edit):
-        window = self.view.window()
         filename = self.view.file_name()
         if filename is None:
             pwd = None
         else:
             pwd = os.path.dirname(filename)
-        view = window.new_file()
+        window = self.view.window()
+        view = create_view(window, pwd)
         window.focus_view(view)
-        gview = GidtermView(view.id(), pwd)
-        _viewmap[view.id()] = gview
+        view_id = view.id()
+        gview = GidtermView(view_id)
+        _viewmap[view_id] = gview
         gview.start(100)
 
 
@@ -966,10 +974,11 @@ def get_gidterm_view(view):
     view_id = view.id()
     gview = _viewmap.get(view_id)
     if gview is None:
-        history = view.settings().get('gidterm_pwd')
-        pwd = history[-1][1]
-        gview = GidtermView(view_id, pwd)
-        _viewmap[view_id] = gview
+        if view.settings().get('is_gidterm'):
+            gview = GidtermView(view_id)
+            _viewmap[view_id] = gview
+        else:
+            raise RuntimeError('not a GidTerm')
     return gview
 
 

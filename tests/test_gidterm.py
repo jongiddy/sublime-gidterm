@@ -89,8 +89,8 @@ class TestGidTermOnce(TestCase, GidTermTestHelper):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.view = sublime.active_window().new_file()
-        self.gview = gidterm.GidtermView(self.view.id(), self.tmpdir)
+        self.view = gidterm.create_view(sublime.active_window(), self.tmpdir)
+        self.gview = gidterm.GidtermView(self.view.id())
         gidterm._viewmap[self.view.id()] = self.gview
         self.gview.start(None)
         # make sure we have a window to work with
@@ -98,7 +98,8 @@ class TestGidTermOnce(TestCase, GidTermTestHelper):
         s.set("close_windows_when_empty", False)
 
     def tearDown(self):
-        self.gview.close()
+        if self.gview:
+            self.gview.close()
         if self.view:
             self.view.set_scratch(True)
             self.view.window().focus_view(self.view)
@@ -426,8 +427,8 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.view = sublime.active_window().new_file()
-        self.gview = gidterm.GidtermView(self.view.id(), self.tmpdir)
+        self.view = gidterm.create_view(sublime.active_window(), self.tmpdir)
+        self.gview = gidterm.GidtermView(self.view.id())
         gidterm._viewmap[self.view.id()] = self.gview
         self.gview.start(50)
         # make sure we have a window to work with
@@ -435,7 +436,8 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
         s.set("close_windows_when_empty", False)
 
     def tearDown(self):
-        self.gview.close()
+        if self.gview:
+            self.gview.close()
         if self.view:
             self.view.set_scratch(True)
             self.view.window().focus_view(self.view)
