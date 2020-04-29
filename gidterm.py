@@ -413,17 +413,6 @@ class GidtermView(sublime.View):
                 return False
         return True
 
-    def handle_selection_modified(self):
-        sel = self.sel()
-        input_first = min(self.start_pos, self.cursor)
-        sel_first = input_first
-        for region in sel:
-            sel_first = min(sel_first, region.begin())
-        if sel_first < input_first:
-            # user has clicked in the area before active command:
-            # change to browse mode
-            _set_browse_mode(self)
-
     def handle_output(self, s, now):
         # Add any saved text from previous iteration, split text on control
         # characters that are handled specially, then save any partial control
@@ -1198,6 +1187,6 @@ class GidtermListener(sublime_plugin.ViewEventListener):
             del _viewmap[view_id]
 
     def on_selection_modified(self):
-        gview = _viewmap.get(self.view.id())
-        if gview:
-            gview.handle_selection_modified()
+        regions = list(self.view.sel())
+        if len(regions) != 1 or not regions[0].empty():
+            _set_browse_mode(self.view)
