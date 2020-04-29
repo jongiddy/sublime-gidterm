@@ -224,14 +224,17 @@ class GidtermView(sublime.View):
         self.ps1 = '$'
         self.set_title()
         settings = self.settings()
-        settings.set('is_gidterm', True)
-        settings.set('spell_check', False)
-        settings.set('gidterm_command_history', [])
-        settings.set('gidterm_pwd', [(self.size(), workdir)])
         settings.set(
             'color_scheme',
             os.path.join(package, 'gidterm.sublime-color-scheme')
         )
+        # prevent ST doing work that doesn't help here
+        settings.set('mini_diff', False)
+        settings.set('spell_check', False)
+        # state
+        settings.set('is_gidterm', True)
+        settings.set('gidterm_command_history', [])
+        settings.set('gidterm_pwd', [(self.size(), workdir)])
         # `cursor` is the location of the input cursor. It is often the end of
         # the doc but may be earlier if the LEFT key is used, or during
         # command history rewriting.
