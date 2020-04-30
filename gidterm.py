@@ -231,12 +231,14 @@ class GidtermView(sublime.View):
         self.disconnected = False
         self.loop_active = False
 
-        _set_terminal_mode(self)
-        self.move_cursor()
+        _set_browse_mode(self)
 
     def start(self, wait):
         self.shell = Shell()
         self.shell.fork(os.path.expanduser(self.pwd))
+        self.cursor = self.size()
+        _set_terminal_mode(self)
+        self.move_cursor()
         if wait is not None:
             if not self.loop_active:
                 self.loop_active = True
@@ -268,17 +270,16 @@ class GidtermView(sublime.View):
                 self.disconnected = False
                 self.shell = Shell()
                 self.start(50)
-                self.cursor = self.size()
                 self.scope = None
-                _set_terminal_mode(self)
-                self.move_cursor()
         elif self.shell is None:
             _set_browse_mode(self)
             self.scope = 'sgr.red-on-default'
             cursor = self.size()
             if self.rowcol(cursor)[1] != 0:
                 cursor = self.write(cursor, '\n')
-            self.write(cursor, '(disconnected - press Enter to restart)\n')
+            self.cursor = self.write(
+                cursor, '(disconnected - press Enter to restart)\n'
+            )
             self.disconnected = True
         else:
             if _set_terminal_mode(self):

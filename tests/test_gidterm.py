@@ -7,6 +7,7 @@ import time
 from unittest import TestCase
 
 import sublime
+import sublime_plugin
 
 version = sublime.version()
 
@@ -120,14 +121,25 @@ class TestGidTermOnce(TestCase, GidTermTestHelper):
         while self.gview.once():
             if time.time() - start > timeout:
                 raise TimeoutError()
+            time.sleep(0.1)
 
-    def send_command(self, command):
-        self.assertTrue(self.gview.at_prompt())
-        self.gview.send(command)
-        # give the shell time to echo command
-        time.sleep(0.1)
-        self.wait_for_idle()
-        self.gview.send(gidterm._terminal_capability_map['cr'])
+    def send_command(self, command, timeout=5):
+        # Send command to terminal. Once this returns, we can be sure that
+        # we're not at the initial prompt, so it is safe to call
+        # `wait_for_prompt` immediately to wait for the command to complete.
+        # We also attempt to ensure that the entire command (except the
+        # trailing newline) has been echoed.
+        start = time.time()
+        self.wait_for_prompt(timeout)
+        self.view.run_command('gidterm_send', {'characters': command})
+        self.gview.once()
+        while self.gview.at_prompt():
+            if time.time() - start > timeout:
+                raise TimeoutError()
+            time.sleep(0.1)
+            self.gview.once()
+        self.wait_for_idle(start + timeout - time.time())
+        self.view.run_command('gidterm_send_cap', {'cap': 'cr'})
 
     def test_at_prompt(self):
         self.wait_for_prompt()
@@ -451,9 +463,46 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
                 raise TimeoutError()
             time.sleep(0.1)
 
-    def send_command(self, command):
+    def send_command(self, command, timeout=5):
+        # Send command to terminal. Once this returns, we can be sure that
+        # we're not at the initial prompt, so it is safe to call
+        # `wait_for_prompt` immediately to wait for the command to complete.
+        start = time.time()
+        self.wait_for_prompt(timeout)
         self.view.run_command('gidterm_send', {'characters': command})
+        while self.gview.at_prompt():
+            if time.time() - start > timeout:
+                raise TimeoutError()
+            time.sleep(0.1)
         self.view.run_command('gidterm_send_cap', {'cap': 'cr'})
+
+    # There are two types of disconnection:
+    # - the Shell instance exits (e.g. user enters Ctrl-D)
+    # - the module gets reloaded, removing the GidTerm instance (e.g. move to
+    # another project and back, or modify `gidterm.py`)
+
+    def disconnect_reconnect(self):
+        self.view.run_command('gidterm_send', {'characters': '\x04'})  # Ctrl-D
+        time.sleep(0.2)
+        self.assertBrowseMode()
+        self.view.run_command('gidterm_send', {'characters': 'e'})
+        time.sleep(0.2)
+        self.assertBrowseMode()
+        self.view.run_command('gidterm_send_cap', {'cap': 'cr'})
+        self.assertIs(gidterm._viewmap[self.view.id()], self.gview)
+        self.wait_for_prompt()
+
+    def disconnect_reload(self):
+        # Using `sublime_plugin.reload_plugin('sublime-gidterm')` doesn't seem
+        # to work, so empty the module global `_viewmap` instead.
+        gidterm._viewmap = {}
+        self.view.run_command('gidterm_send', {'characters': 'e'})
+        time.sleep(0.2)
+        self.assertBrowseMode()
+        self.view.run_command('gidterm_send_cap', {'cap': 'cr'})
+        self.assertIsNot(gidterm._viewmap[self.view.id()], self.gview)
+        self.gview = gidterm._viewmap[self.view.id()]
+        self.wait_for_prompt()
 
     def test_disconnect(self):
         """
@@ -462,18 +511,11 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
         """
         self.wait_for_prompt()
         self.assertTerminalMode()
-        self.view.run_command('gidterm_send', {'characters': '\x04'})  # Ctrl-D
-        time.sleep(0.2)
-        self.view.run_command('gidterm_send', {'characters': 'e'})
-        time.sleep(0.2)
-        self.assertBrowseMode()
-        self.view.run_command('gidterm_send_cap', {'cap': 'cr'})
-        self.wait_for_prompt()
+        self.disconnect_reconnect()
         self.assertTerminalMode()
         command = 'echo hello'
         c1 = self.single_cursor()
         self.send_command(command)
-        time.sleep(0.2)
         self.wait_for_prompt()
         c2 = self.single_cursor()
         output = self.view.substr(sublime.Region(c1, c2))
@@ -483,3 +525,42 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
         )
         self.assertTerminalMode()
         self.assertEqual(self.tmpdir, self.gview.pwd)
+
+    def test_reload(self):
+        """
+        Disconnection puts editor in browse mode. Performing a terminal
+        action starts a new shell.
+        """
+        self.wait_for_prompt()
+        self.assertTerminalMode()
+        self.disconnect_reload()
+        self.assertTerminalMode()
+        command = 'echo hello'
+        c1 = self.single_cursor()
+        self.send_command(command)
+        self.wait_for_prompt()
+        c2 = self.single_cursor()
+        output = self.view.substr(sublime.Region(c1, c2))
+        self.assertTrue(
+            'echo hello\nhello\n' in output,
+            repr((output, self.all_contents(), c1))
+        )
+        self.assertTerminalMode()
+        self.assertEqual(self.tmpdir, self.gview.pwd)
+
+    def test_reload_history(self):
+        """
+        Reconnection can access history before disconnection.
+        """
+        self.wait_for_prompt()
+        self.assertTerminalMode()
+        command = 'echo hello'
+        c1 = self.single_cursor()
+        self.send_command(command)
+        self.wait_for_prompt()
+        self.disconnect_reload()
+        self.assertTerminalMode()
+        self.view.run_command('gidterm_escape', {'key': 'shift+ctrl+pageup'})
+        region = self.single_selection()
+        self.assertEqual(c1, region.begin())
+        self.assertEqual(command + '\n', self.view.substr(region))
