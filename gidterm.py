@@ -207,7 +207,8 @@ class GidtermView(sublime.View):
     _escape_pat = re.compile(
         r'(\x07|'                                       # BEL
         r'(?:\x08+)|'                                   # BACKSPACE's
-        r'(?:\r+\n?)|'                                  # CR's with optional NL
+        r'(?:\r+)|'                                     # CR's
+        r'\n|'                                          # NL
         r'(?:\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]))'  # CSI
     )
 
@@ -297,12 +298,18 @@ class GidtermView(sublime.View):
             self.shell = None
 
     def insert_text(self, start, text):
+        cursor = start + len(text)
         if start == self.size():
             self.run_command(
                 'append',
                 {'characters': text, 'force': True, 'scroll_to_end': True}
             )
-            end = self.size()
+            if cursor != self.size():
+                print(
+                    'gidterm: [WARN] cursor not at end after inserting'
+                    ' {!r}'.format(text)
+                )
+                cursor = self.size()
         else:
             self.set_read_only(False)
             try:
@@ -311,32 +318,48 @@ class GidtermView(sublime.View):
                 )
             finally:
                 self.set_read_only(True)
-            end = start + len(text)
 
         if self.scope is not None:
             regions = self.get_regions(self.scope)
             if regions and regions[-1].end() == start:
                 prev = regions.pop()
-                region = sublime.Region(prev.begin(), end)
+                region = sublime.Region(prev.begin(), cursor)
             else:
-                region = sublime.Region(start, end)
+                region = sublime.Region(start, cursor)
             regions.append(region)
             self.add_regions(
                 self.scope, regions, self.scope,
                 flags=sublime.DRAW_NO_OUTLINE | sublime.PERSISTENT
             )
 
-        return end
+        return cursor
 
     def write(self, start, text):
+        cursor = start + len(text)
         if start == self.size():
             self.run_command(
                 'append',
                 {'characters': text, 'force': True, 'scroll_to_end': True}
             )
-            end = self.size()
+            if cursor != self.size():
+                print(
+                    'gidterm: [WARN] cursor not at end after writing'
+                    ' {!r}'.format(text)
+                )
+                cursor = self.size()
         else:
-            end = start + len(text)
+            # Overwrite text to end of line, then insert additional text
+            classification = self.classify(start)
+            if classification & sublime.CLASS_LINE_END:
+                end = start
+            else:
+                end = self.find_by_class(
+                    start,
+                    forward=True,
+                    classes=sublime.CLASS_LINE_END
+                )
+            if cursor < end:
+                end = cursor
             self.set_read_only(False)
             try:
                 self.run_command(
@@ -350,16 +373,16 @@ class GidtermView(sublime.View):
             regions = self.get_regions(self.scope)
             if regions and regions[-1].end() == start:
                 prev = regions.pop()
-                region = sublime.Region(prev.begin(), end)
+                region = sublime.Region(prev.begin(), cursor)
             else:
-                region = sublime.Region(start, end)
+                region = sublime.Region(start, cursor)
             regions.append(region)
             self.add_regions(
                 self.scope, regions, self.scope,
                 flags=sublime.DRAW_NO_OUTLINE | sublime.PERSISTENT
             )
 
-        return end
+        return cursor
 
     def move_cursor(self):
         follow = self.settings().get('gidterm_follow')
@@ -370,20 +393,32 @@ class GidtermView(sublime.View):
             self.show(self.cursor)
 
     def erase(self, begin, end):
-        length = end - begin
-        if length > 0:
-            self.set_read_only(False)
-            try:
-                self.run_command(
-                    'gidterm_replace_text',
-                    {
-                        'begin': begin,
-                        'end': end,
-                        'characters': ' ' * length,
-                    }
-                )
-            finally:
-                self.set_read_only(True)
+        classification = self.classify(begin)
+        if classification & sublime.CLASS_LINE_END:
+            eol = begin
+        else:
+            eol = self.find_by_class(
+                begin,
+                forward=True,
+                classes=sublime.CLASS_LINE_END
+            )
+        if eol <= end:
+            self.delete(begin, eol)
+        else:
+            length = end - begin
+            if length > 0:
+                self.set_read_only(False)
+                try:
+                    self.run_command(
+                        'gidterm_replace_text',
+                        {
+                            'begin': begin,
+                            'end': end,
+                            'characters': '\ufffd' * length,
+                        }
+                    )
+                finally:
+                    self.set_read_only(True)
 
     def delete(self, begin, end):
         if begin < end:
@@ -440,18 +475,28 @@ class GidtermView(sublime.View):
             self.cursor = self.cursor - n
             return
         if part[0] == '\r':
-            if part[-1] == '\n':
+            # move cursor to start of line
+            classification = self.classify(self.cursor)
+            if not classification & sublime.CLASS_LINE_START:
+                bol = self.find_by_class(
+                    self.cursor,
+                    forward=False,
+                    classes=sublime.CLASS_LINE_START
+                )
+                self.cursor = bol
+            return
+        if part == '\n':
+            row, col = self.rowcol(self.cursor)
+            maxrow, _ = self.rowcol(self.size())
+            if row == maxrow:
                 self.cursor = self.write(self.size(), '\n')
             else:
-                # move cursor to start of line
-                classification = self.classify(self.cursor)
-                if not classification & sublime.CLASS_LINE_START:
-                    bol = self.find_by_class(
-                        self.cursor,
-                        forward=False,
-                        classes=sublime.CLASS_LINE_START
-                    )
-                    self.cursor = bol
+                row, col = self.rowcol(self.cursor)
+                row += 1
+                cursor = self.text_point(row, col)
+                if self.rowcol(cursor)[0] > row:
+                    cursor = self.text_point(row + 1, 0) - 1
+                self.cursor = cursor
             return
         settings = self.settings()
         command = part[-1]
@@ -479,6 +524,7 @@ class GidtermView(sublime.View):
                     settings.set('gidterm_command_history', history)
                     self.in_lines = None
                     self.cursor = self.size()
+                    self.start_pos = self.cursor
                     self.out_start_time = now
                     return
                 elif prompt_type == '2':
@@ -732,9 +778,11 @@ class GidtermView(sublime.View):
                 elif num == '107':
                     bg = 'brightwhite'
                 else:
-                    print('Unhandled SGR code: {} in {}'.format(
-                        num, part
-                    ))
+                    print(
+                        'gidterm: [WARN] Unhandled SGR code: {} in {}'.format(
+                            num, part
+                        )
+                    )
                 i += 1
             scope = 'sgr.{}-on-{}'.format(fg, bg)
             if scope == 'sgr.default-on-default':
@@ -748,7 +796,37 @@ class GidtermView(sublime.View):
             else:
                 n = 1
             # keep cursor at start
-            self.insert_text(self.cursor, ' ' * n)
+            self.insert_text(self.cursor, '\ufffd' * n)
+            return
+        elif command == 'A':
+            # up
+            arg = part[2:-1]
+            if arg:
+                n = int(arg)
+            else:
+                n = 1
+            row, col = self.rowcol(self.cursor)
+            row -= n
+            if row < 0:
+                row = 0
+            cursor = self.text_point(row, col)
+            if self.rowcol(cursor)[0] > row:
+                cursor = self.text_point(row + 1, 0) - 1
+            self.cursor = cursor
+            return
+        elif command == 'B':
+            # down
+            arg = part[2:-1]
+            if arg:
+                n = int(arg)
+            else:
+                n = 1
+            row, col = self.rowcol(self.cursor)
+            row += n
+            cursor = self.text_point(row, col)
+            if self.rowcol(cursor)[0] > row:
+                cursor = self.text_point(row + 1, 0) - 1
+            self.cursor = cursor
             return
         elif command == 'C':
             # right
@@ -781,6 +859,27 @@ class GidtermView(sublime.View):
                 self.run_command(
                     'move', {"by": "characters", "forward": False}
                 )
+            return
+        elif command == 'H':
+            # home
+            arg = part[2:-1]
+            if not arg:
+                hrow = 0
+                hcol = 0
+            elif ';' in arg:
+                parts = arg.split(';')
+                hrow = int(parts[0]) - 1
+                hcol = int(parts[1]) - 1
+            else:
+                hrow = int(arg) - 1
+                hcol = 0
+            row, col = self.rowcol(self.start_pos)
+            row += hrow
+            col += hcol
+            cursor = self.text_point(row, col)
+            if self.rowcol(cursor)[0] > row:
+                cursor = self.text_point(row + 1, 0) - 1
+            self.cursor = cursor
             return
         elif command == 'K':
             arg = part[2:-1]
@@ -833,7 +932,7 @@ class GidtermView(sublime.View):
             end = self.cursor + n
             self.delete(self.cursor, end)
             return
-        elif command in ('A', 'B', 'E', 'F', 'G', 'H', 'J', 'f'):
+        elif command in ('E', 'F', 'G', 'H', 'J', 'f'):
             # we don't handle other cursor movements, since we lie
             # about the screen width, so apps will get confused. We
             # ensure we are at the start of a line when we see them.
@@ -1026,7 +1125,11 @@ class GidtermSendCapCommand(sublime_plugin.TextCommand):
         view = get_gidterm_view(self.view)
         seq = _terminal_capability_map.get(cap)
         if seq is None:
-            print('unexpected terminal capability: {}'.format(cap))
+            print(
+                'gidterm: [WARN] unexpected terminal capability: {}'.format(
+                    cap
+                )
+            )
         else:
             view.send(seq)
 
@@ -1088,7 +1191,7 @@ class GidtermEscapeCommand(sublime_plugin.TextCommand):
         view = get_gidterm_view(self.view)
         action = _follow_escape.get(key)
         if action is None:
-            print('unexpected escape key: {}'.format(key))
+            print('gidterm: [WARN] unexpected escape key: {}'.format(key))
         else:
             _set_browse_mode(view)
             action(view)
@@ -1131,7 +1234,10 @@ class GidtermSelectCommand(sublime_plugin.TextCommand):
         sel = view.sel()
         history = settings.get('gidterm_command_history')
         if forward is True:
-            pos = sel[0].end()
+            try:
+                pos = sel[0].end()
+            except IndexError:
+                pos = view.size()
             size = len(history)
             index = size // 2
             while history and history[index][0][0] < pos:
@@ -1158,7 +1264,10 @@ class GidtermSelectCommand(sublime_plugin.TextCommand):
                 sel.add(end)
                 view.show(end)
         else:
-            pos = sel[0].begin()
+            try:
+                pos = sel[0].begin()
+            except IndexError:
+                pos = view.size()
             size = len(history)
             index = size // 2
             while history and history[index][-1][1] > pos:
