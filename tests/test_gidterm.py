@@ -1,5 +1,6 @@
 import codecs
 from datetime import timedelta
+import os
 import shutil
 import sys
 import tempfile
@@ -7,7 +8,6 @@ import time
 from unittest import TestCase
 
 import sublime
-import sublime_plugin
 
 version = sublime.version()
 
@@ -564,3 +564,270 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
         region = self.single_selection()
         self.assertEqual(c1, region.begin())
         self.assertEqual(command + '\n', self.view.substr(region))
+
+
+class TestGidTermContext(TestCase):
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.view = gidterm.create_view(sublime.active_window(), self.tmpdir)
+        self.gview = gidterm.GidtermView(self.view.id())
+        gidterm._viewmap[self.view.id()] = self.gview
+        # make sure we have a window to work with
+        s = sublime.load_settings("Preferences.sublime-settings")
+        s.set("close_windows_when_empty", False)
+
+    def tearDown(self):
+        if self.gview:
+            self.gview.close()
+        if self.view:
+            self.view.set_scratch(True)
+            self.view.window().focus_view(self.view)
+            self.view.window().run_command("close_file")
+        shutil.rmtree(self.tmpdir)
+
+    def test_description_directory(self):
+        gc = gidterm.gidterm_context(self.view)
+
+        # Empty area
+        self.view.run_command('append', {'characters': '   \n', 'force': True})
+        x, y = self.view.text_to_window(self.view.size() - 2)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message, 'GidTerm: ' + gidterm.ACTION_LIST_CURRENT_DIRECTORY
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_DIR_LIST)
+        self.assertEqual(path, self.tmpdir)
+
+        # Dot
+        self.view.run_command('append', {'characters': '.\n', 'force': True})
+        x, y = self.view.text_to_window(self.view.size() - 2)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message, 'GidTerm: ' + gidterm.ACTION_LIST_CURRENT_DIRECTORY
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_DIR_LIST)
+        self.assertEqual(path, self.tmpdir)
+
+        # Double-dot
+        self.view.run_command('append', {'characters': '..\n', 'force': True})
+        x, y = self.view.text_to_window(self.view.size() - 2)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message, 'GidTerm: ' + gidterm.ACTION_GOTO_PARENT_DIRECTORY
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_DIR_CHANGE)
+        self.assertEqual(path, os.path.dirname(self.tmpdir))
+
+        subdir = os.path.join(self.tmpdir, 'subdir')
+        os.mkdir(subdir)
+
+        # Absolute path of sub-directory
+        self.view.run_command(
+            'append', {'characters': subdir + '\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 2)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message,
+            'GidTerm: ' + gidterm.CONTEXT_ACTION_DIR_CHANGE + ' subdir'
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_DIR_CHANGE)
+        self.assertEqual(path, subdir)
+
+        self.view.run_command(
+            'append', {'characters': 'subdir\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 2)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message,
+            'GidTerm: ' + gidterm.CONTEXT_ACTION_DIR_CHANGE + ' subdir'
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_DIR_CHANGE)
+        self.assertEqual(path, subdir)
+
+    def test_description_file(self):
+        gc = gidterm.gidterm_context(self.view)
+
+        file_absent = os.path.join(self.tmpdir, 'absent')
+        file_present = os.path.join(self.tmpdir, 'present')
+        with open(file_present, 'w'):
+            pass
+        also_present = os.path.join(self.tmpdir, 'also present')
+        with open(also_present, 'w'):
+            pass
+
+        # Absolute path of non-existing file
+        self.view.run_command(
+            'append', {'characters': file_absent + '\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 2)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message, 'GidTerm: ' + gidterm.CONTEXT_ACTION_FILE_NEW + ' absent'
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_FILE_NEW)
+        self.assertEqual(path, file_absent)
+
+        # Relative path of non-existing file
+        self.view.run_command(
+            'append', {'characters': 'absent\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 2)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message, 'GidTerm: ' + gidterm.CONTEXT_ACTION_FILE_NEW + ' absent'
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_FILE_NEW)
+        self.assertEqual(path, file_absent)
+
+        # Absolute path of existing file
+        self.view.run_command(
+            'append', {'characters': file_present + '\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 2)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message,
+            'GidTerm: ' + gidterm.CONTEXT_ACTION_FILE_OPEN + ' present'
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_FILE_OPEN)
+        self.assertEqual(path, file_present)
+
+        # Relative path of existing file
+        self.view.run_command(
+            'append', {'characters': 'present\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 2)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message,
+            'GidTerm: ' + gidterm.CONTEXT_ACTION_FILE_OPEN + ' present'
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_FILE_OPEN)
+        self.assertEqual(path, file_present)
+
+        # Clicking after space can find name with space
+        self.view.run_command(
+            'append', {'characters': also_present + '\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 2)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message,
+            'GidTerm: ' + gidterm.CONTEXT_ACTION_FILE_OPEN + " 'also present'"
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_FILE_OPEN)
+        self.assertEqual(path, also_present)
+
+        # Clicking before space can find name with space
+        self.view.run_command(
+            'append', {'characters': also_present + '\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 12)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message,
+            'GidTerm: ' + gidterm.CONTEXT_ACTION_FILE_OPEN + " 'also present'"
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_FILE_OPEN)
+        self.assertEqual(path, also_present)
+
+        # Clicking on point that matches two names returns the longer name
+        self.view.run_command(
+            'append', {'characters': 'also present\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 2)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message,
+            'GidTerm: ' + gidterm.CONTEXT_ACTION_FILE_OPEN + " 'also present'"
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_FILE_OPEN)
+        self.assertEqual(path, also_present)
+
+        # Absolute path of existing file with row
+        self.view.run_command(
+            'append', {'characters': file_present + ':12\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 5)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message,
+            'GidTerm: ' + gidterm.CONTEXT_ACTION_FILE_GOTO + ' present:12'
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_FILE_GOTO)
+        self.assertEqual(path, file_present + ':12:0')
+
+        # Relative path of existing file with row
+        self.view.run_command(
+            'append', {'characters': 'present:12\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 5)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message,
+            'GidTerm: ' + gidterm.CONTEXT_ACTION_FILE_GOTO + ' present:12'
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_FILE_GOTO)
+        self.assertEqual(path, file_present + ':12:0')
+
+        # Absolute path of existing file with row and column
+        self.view.run_command(
+            'append', {'characters': file_present + ':12:34\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 8)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message,
+            'GidTerm: ' + gidterm.CONTEXT_ACTION_FILE_GOTO + ' present:12:34'
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_FILE_GOTO)
+        self.assertEqual(path, file_present + ':12:34')
+
+        # Relative path of existing file with row and column
+        self.view.run_command(
+            'append', {'characters': 'present:12:34\n', 'force': True}
+        )
+        x, y = self.view.text_to_window(self.view.size() - 8)
+        event = {'x': x, 'y': y}
+        message = gc.description(event)
+        action, path = self.view.settings().get('gidterm_context')
+        self.assertEqual(
+            message,
+            'GidTerm: ' + gidterm.CONTEXT_ACTION_FILE_GOTO + ' present:12:34'
+        )
+        self.assertEqual(action, gidterm.CONTEXT_ACTION_FILE_GOTO)
+        self.assertEqual(path, file_present + ':12:34')
+

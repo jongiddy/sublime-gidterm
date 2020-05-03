@@ -1,12 +1,15 @@
 import codecs
 from datetime import datetime, timedelta, timezone
+import glob
 import os
 import pty
 import re
 import select
+import shlex
 import signal
 import subprocess
 import tempfile
+import time
 
 import sublime
 import sublime_plugin
@@ -174,8 +177,10 @@ def get_vcs_branch(d):
         out = subprocess.check_output(
             ('git', 'status', '--porcelain', '--untracked-files=no'),
             cwd=d,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
         )
-        for line in out.split(b'\n'):
+        for line in out.split('\n'):
             state = line[:2]
             if state.strip():
                 # any other state apart from '  '
@@ -971,12 +976,14 @@ class GidtermCommand(sublime_plugin.TextCommand):
         gview.start(100)
 
 
-def get_gidterm_view(view):
+def get_gidterm_view(view, start=False):
     view_id = view.id()
     gview = _viewmap.get(view_id)
     if gview is None:
         if view.settings().get('is_gidterm'):
             gview = GidtermView(view_id)
+            if start:
+                gview.start(50)
             _viewmap[view_id] = gview
         else:
             raise RuntimeError('not a GidTerm')
@@ -1166,6 +1173,257 @@ class GidtermSelectCommand(sublime_plugin.TextCommand):
                     sel.add_all([sublime.Region(b, e) for (b, e) in entry])
                     view.show(sel)
                     return
+
+
+def is_likely_path_char(c):
+    if ord(c) <= 32:  # Control character or space
+        return False
+    if c in '<>&|\'",;:[](){}*?':  # more commonly near paths than in paths
+        return False
+    return True
+
+
+def glob_escape(s):
+    r = ''
+    for c in s:
+        if c in ('?', '*', '['):
+            r += '[{}]'.format(c)
+        else:
+            r += c
+    return r
+
+
+def find_all(s, pat):
+    i = s.find(pat)
+    while i != -1:
+        yield i
+        i = s.find(pat, i + 1)
+
+
+def get_menu_path(view, event):
+    point = view.window_to_text((event['x'], event['y']))
+
+    # If right-click is in a selected non-empty region, use the path
+    # in the region. This allows override of the heuristic.
+    for region in view.sel():
+        if region.contains(point) and not region.empty():
+            path = view.substr(region)
+            return region, path
+
+    # Look for surrounding text that is almost certainly part of the
+    # path. Use that text to search for possible matches in filesystem.
+    # Check each possibility for a match in further surrounding text,
+    # and return longest match.  If no candidate is found, return original
+    # match.
+    begin = end = point
+    while begin > 0 and is_likely_path_char(view.substr(begin - 1)):
+        begin -= 1
+    while end < view.size() and is_likely_path_char(view.substr(end)):
+        end += 1
+    region = sublime.Region(begin, end)
+    if begin == end:
+        print('gidterm: [WARN] no path found')
+        return region, None
+    path = view.substr(region)
+    if path[0] == '~':
+        # TODO: handle this
+        pass
+    elif path[0] == '/':
+        possibles = glob.glob('{}*'.format(glob_escape(path)))
+        candidate = None
+        maxlen = 0
+        for possible in possibles:
+            r = sublime.Region(begin, begin + len(possible))
+            text = view.substr(r)
+            if text == possible and r.size() > maxlen:
+                candidate = r, possible
+                maxlen = r.size()
+        if candidate:
+            return candidate
+    else:
+        history = view.settings().get('gidterm_pwd')
+        # Add pwd on for glob matching, and then remove it for text matching
+        glob_pwd = glob_escape(get_pwd(history, region))
+        prefixlen = len(glob_pwd) + 1
+        possibles = [p[prefixlen:] for p in glob.glob(
+            '{}/*{}*'.format(glob_pwd, glob_escape(path))
+        )]
+        candidate = None
+        maxlen = 0
+        for possible in possibles:
+            for idx in find_all(possible, path):
+                b = begin - idx
+                if b >= 0:
+                    r = sublime.Region(b, b + len(possible))
+                    text = view.substr(r)
+                    if text == possible and r.size() > maxlen:
+                        candidate = r, possible
+                        maxlen = r.size()
+                        break
+        if candidate:
+            return candidate
+
+    return region, path
+
+
+def get_pwd(history, region):
+    pos = region.begin()
+    base = '~'
+    for start, pwd in history:
+        if start > pos:
+            break
+        base = pwd
+    return os.path.expanduser(base)
+
+
+def get_line_col(view, pos):
+    ch = view.substr(pos)
+    if ch == ':':
+        # PATH:LINE:COL
+        pos += 1
+        line = view.substr(pos)
+        if line not in '0123456789':
+            return None
+        pos += 1
+        ch = view.substr(pos)
+        while ch in '0123456789':
+            line += ch
+            pos += 1
+            ch = view.substr(pos)
+        if ch != ':':
+            return (line, 0)
+        pos += 1
+        col = view.substr(pos)
+        if col not in '0123456789':
+            return (line, 0)
+        pos += 1
+        ch = view.substr(pos)
+        while ch in '0123456789':
+            col += ch
+            pos += 1
+            ch = view.substr(pos)
+        return (line, col)
+    elif ch == '"':
+        if view.substr(sublime.Region(pos + 1, pos + 8)) == ', line ':
+            # Python: PATH", line LINE,
+            pos += 8
+            line = view.substr(pos)
+            if line not in '0123456789':
+                return None
+            pos += 1
+            ch = view.substr(pos)
+            while ch in '0123456789':
+                line += ch
+                pos += 1
+                ch = view.substr(pos)
+            return (line, 0)
+    return None
+
+
+CONTEXT_ACTION_DIR_LIST = 'List Directory'
+ACTION_LIST_CURRENT_DIRECTORY = 'List Current Directory'
+CONTEXT_ACTION_DIR_CHANGE = 'Goto Directory'
+ACTION_GOTO_PARENT_DIRECTORY = 'Goto Parent Directory'
+CONTEXT_ACTION_FILE_OPEN = 'Open File'
+CONTEXT_ACTION_FILE_GOTO = 'Goto File'
+CONTEXT_ACTION_FILE_NEW = 'Create File'
+
+
+class gidterm_context(sublime_plugin.TextCommand):
+
+    def run(self, edit, event):
+        context = self.view.settings().get('gidterm_context')
+        if context is None:
+            return
+        action, path = context
+        if action == CONTEXT_ACTION_DIR_LIST:
+            gview = get_gidterm_view(self.view, start=True)
+            if not gview.at_prompt():
+                time.sleep(0.5)
+            if gview.at_prompt():
+                cr = _terminal_capability_map['cr']
+                gview.send('ls -a{}'.format(cr))
+        elif action == CONTEXT_ACTION_DIR_CHANGE:
+            gview = get_gidterm_view(self.view, start=True)
+            if not gview.at_prompt():
+                time.sleep(0.5)
+            if gview.at_prompt():
+                pwd = os.path.expanduser(gview.pwd)
+                relative = os.path.relpath(path, start=pwd)
+                if len(relative) < len(path):
+                    path = relative
+                cr = _terminal_capability_map['cr']
+                gview.send('cd {}{}'.format(shlex.quote(path), cr))
+        else:
+            window = self.view.window()
+            if action == CONTEXT_ACTION_FILE_GOTO:
+                options = sublime.ENCODED_POSITION
+            else:
+                options = 0
+            view = window.open_file(path, options)
+            window.focus_view(view)
+        self.view.settings().set('gidterm_context', None)
+
+    def is_visible(self, event):
+        return bool(self.view.settings().get('is_gidterm'))
+
+    def description(self, event):
+        action = CONTEXT_ACTION_DIR_LIST
+        region, path = get_menu_path(self.view, event)
+        history = self.view.settings().get('gidterm_pwd')
+        pwd = os.path.expanduser(history[-1][1])
+        if region is None:
+            path = pwd
+            label = os.path.relpath(path, start=pwd)
+            if len(path) < len(label):
+                label = path
+            label = shlex.quote(label)
+        else:
+            if path is None:
+                path = os.path.expanduser(get_pwd(history, region))
+                label = os.path.relpath(path, start=pwd)
+                if len(path) < len(label):
+                    label = path
+                label = shlex.quote(label)
+                action = CONTEXT_ACTION_DIR_CHANGE
+            else:
+                path = os.path.expanduser(path)
+                if not os.path.isabs(path):
+                    base = get_pwd(history, region)
+                    path = os.path.join(base, path)
+                path = os.path.normpath(path)
+                label = os.path.relpath(path, start=pwd)
+                if len(path) < len(label):
+                    label = path
+                label = shlex.quote(label)
+                if os.path.isdir(path):
+                    action = CONTEXT_ACTION_DIR_CHANGE
+                elif os.path.exists(path):
+                    linecol = get_line_col(self.view, region.end())
+                    if linecol:
+                        line, col = linecol
+                        path = '{}:{}:{}'.format(path, line, col)
+                        if col == 0:
+                            label = '{}:{}'.format(label, line)
+                        else:
+                            label = '{}:{}:{}'.format(label, line, col)
+                        action = CONTEXT_ACTION_FILE_GOTO
+                    else:
+                        action = CONTEXT_ACTION_FILE_OPEN
+                else:
+                    action = CONTEXT_ACTION_FILE_NEW
+
+            if action == CONTEXT_ACTION_DIR_CHANGE and path == pwd:
+                action = CONTEXT_ACTION_DIR_LIST
+        self.view.settings().set('gidterm_context', (action, path))
+        if action is CONTEXT_ACTION_DIR_LIST and label == '.':
+            return 'GidTerm: {}'.format(ACTION_LIST_CURRENT_DIRECTORY)
+        elif action is CONTEXT_ACTION_DIR_CHANGE and label == '..':
+            return 'GidTerm: {}'.format(ACTION_GOTO_PARENT_DIRECTORY)
+        return 'GidTerm: {} {}'.format(action, label)
+
+    def want_event(self):
+        return True
 
 
 class GidtermListener(sublime_plugin.ViewEventListener):
