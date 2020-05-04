@@ -551,7 +551,20 @@ class GidtermView(sublime.View):
             self.ps1 = ps1
             cursor = self.size()
             col = self.rowcol(cursor)[1]
-            if col != 0:
+            if col == 0:
+                if self.cursor == cursor:
+                    # cursor at end, with final newline
+                    ret_scope = 'sgr.green-on-default'
+                else:
+                    # cursor not at end
+                    ret_scope = 'sgr.red-on-default'
+            else:
+                if self.cursor == cursor:
+                    # cursor at end, but no final newline
+                    ret_scope = 'sgr.yellow-on-default'
+                else:
+                    # cursor not at end
+                    ret_scope = 'sgr.red-on-default'
                 cursor = self.write(cursor, '\n')
             if pwd != self.pwd:
                 history = settings.get('gidterm_pwd')
@@ -570,10 +583,7 @@ class GidtermView(sublime.View):
                 if info:
                     self.scope = 'sgr.yellow-on-default'
                     cursor = self.write(cursor, info)
-                if col == 0:
-                    self.scope = 'sgr.green-on-default'
-                else:
-                    self.scope = 'sgr.red-on-default'
+                self.scope = ret_scope
                 cursor = self.write(cursor, '\u23ce')
                 self.scope = None
                 elapsed = timedelta_seconds(now - self.out_start_time)
