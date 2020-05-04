@@ -1240,6 +1240,10 @@ class GidtermSelectCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, forward):
         view = get_gidterm_view(self.view)
+        if view.in_lines is None:
+            # Running this during output causes slowness / hangs
+            # e.g. `man bash` followed by Shift-Ctrl-PgUp
+            return
         settings = view.settings()
         sel = view.sel()
         history = settings.get('gidterm_command_history')

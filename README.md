@@ -1,6 +1,6 @@
 # Sublime GidTerm
 
-Terminal that runs inside Sublime Text. Alpha quality. Linux only.
+Terminal that runs inside Sublime Text. Beta quality. Linux only.
 
 ## Install
 
@@ -36,7 +36,7 @@ In terminal mode, change to browse mode using one of the following:
 - Ctrl-click;
 - Select any text; 
 - `Home`, `End`, `PageUp`, `PageDown` (including with `Shift` and `Ctrl` modifiers) to perform the usual Sublime Text navigation;
-- `Shift-Ctrl-PageUp` and `Shift-Ctrl-PageDown` to select the previous or next command respectively.
+- `Shift-Ctrl-PageUp` and `Shift-Ctrl-PageDown` to select the previous or next command respectively. This only works when at the input prompt.
 
 In browse mode, change to terminal mode using one of the following:
 
