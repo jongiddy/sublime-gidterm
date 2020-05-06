@@ -462,10 +462,147 @@ class GidtermView(sublime.View):
                     else:
                         self.prompt_text += part
             else:
-                self.handle_control(now, part)
+                if part[0] == '\x1b':
+                    command = part[-1]
+                    if command == 'p':
+                        self.handle_prompt(part, now)
+                    elif command == '~':
+                        self.handle_prompt_end(part, now)
+                    else:
+                        self.handle_escape(part)
+                else:
+                    self.handle_control(part)
         self.move_cursor()
 
-    def handle_control(self, now, part):
+    def handle_prompt(self, part, now):
+        arg = part[2:-1]
+        if arg.endswith('!'):
+            # standalone prompt
+            prompt_type = arg[0]
+            if prompt_type == '0':
+                # command input ends, output starts
+                # trim trailing spaces from input command
+                assert self.cursor == self.size()
+                end = self.size() - 1
+                assert self.substr(end) == '\n'
+                in_end_pos = end
+                while self.substr(in_end_pos - 1) == ' ':
+                    in_end_pos -= 1
+                self.delete(in_end_pos, end)
+                # update history
+                assert self.substr(in_end_pos) == '\n'
+                self.in_lines.append(
+                    (self.start_pos, in_end_pos + 1)
+                )
+                settings = self.settings()
+                history = settings.get('gidterm_command_history')
+                history.append(self.in_lines)
+                settings.set('gidterm_command_history', history)
+                self.in_lines = None
+                self.cursor = self.size()
+                self.start_pos = self.cursor
+                self.out_start_time = now
+            elif prompt_type == '2':
+                # command input continues
+                assert self.cursor == self.size()
+                end = self.size() - 1
+                assert self.substr(end) == '\n'
+                self.in_lines.append(
+                    (self.start_pos, end)
+                )
+                self.scope = 'sgr.magenta-on-default'
+                self.cursor = self.write(self.cursor, '> ')
+                self.scope = None
+                self.start_pos = self.cursor
+        else:
+            # start of prompt with interpolated text
+            assert self.prompt_type is None, self.prompt_type
+            self.prompt_type = arg
+            self.prompt_text = ''
+
+    def handle_prompt_end(self, part, now):
+        assert self.prompt_type == '1', self.prompt_type
+        # output ends, command input starts
+        ps1, status, virtualenv, pwd = self.prompt_text.split('@', 3)
+        self.ps1 = ps1
+        cursor = self.size()
+        col = self.rowcol(cursor)[1]
+        if col == 0:
+            if self.cursor == cursor:
+                # cursor at end, with final newline
+                ret_scope = 'sgr.green-on-default'
+            else:
+                # cursor not at end
+                ret_scope = 'sgr.red-on-default'
+        else:
+            if self.cursor == cursor:
+                # cursor at end, but no final newline
+                ret_scope = 'sgr.yellow-on-default'
+            else:
+                # cursor not at end
+                ret_scope = 'sgr.red-on-default'
+            cursor = self.write(cursor, '\n')
+        if pwd != self.pwd:
+            settings = self.settings()
+            history = settings.get('gidterm_pwd')
+            history.append((cursor, pwd))
+            settings.set('gidterm_pwd', history)
+            self.pwd = pwd
+        self.set_title()
+        if self.out_start_time is not None:
+            # just finished displaying output
+            if status == '0':
+                self.scope = 'sgr.green-on-default'
+            else:
+                self.scope = 'sgr.red-on-default'
+            cursor = self.write(cursor, status)
+            info = _exit_status_info.get(status)
+            if info:
+                self.scope = 'sgr.yellow-on-default'
+                cursor = self.write(cursor, info)
+            self.scope = ret_scope
+            cursor = self.write(cursor, '\u23ce')
+            self.scope = None
+            elapsed = timedelta_seconds(now - self.out_start_time)
+            cursor = self.write(cursor, ' {}\n'.format(elapsed))
+            # Reset the output timestamp to None so that
+            # pressing enter for a blank line does not show
+            # an updated time since run
+            self.out_start_time = None
+        extra_line = False
+        if virtualenv:
+            self.scope = 'sgr.magenta-on-default'
+            cursor = self.write(cursor, '{}'.format(
+                os.path.basename(virtualenv)
+            ))
+            extra_line = True
+        branch, state = get_vcs_branch(os.path.expanduser(pwd))
+        if branch:
+            if extra_line:
+                cursor = self.write(cursor, ' ')
+            if state == 0:
+                self.scope = 'sgr.green-on-default'
+            elif state == 1:
+                self.scope = 'sgr.yellow-on-default'
+            else:
+                self.scope = 'sgr.red-on-default'
+            cursor = self.write(cursor, '{}'.format(
+                branch
+            ))
+            extra_line = True
+        self.scope = None
+        if extra_line:
+            cursor = self.write(cursor, '\n')
+        self.scope = 'sgr.brightblack-on-default'
+        cursor = self.write(cursor, '[{}]'.format(pwd))
+        self.scope = 'sgr.magenta-on-default'
+        self.cursor = self.write(cursor, '\n{} '.format(ps1))
+        self.scope = None
+        self.start_pos = self.cursor
+        self.in_lines = []
+        self.prompt_type = None
+
+    def handle_control(self, part):
         if part == '\x07':
             return
         if part[0] == '\x08':
@@ -498,134 +635,12 @@ class GidtermView(sublime.View):
                     cursor = self.text_point(row + 1, 0) - 1
                 self.cursor = cursor
             return
-        settings = self.settings()
+        print('gidterm: [WARN] unknown control: {!r}'.format(part))
+        self.cursor = self.write(self.cursor, part)
+
+    def handle_escape(self, part):
         command = part[-1]
-        if command == 'p':
-            # prompt
-            arg = part[2:-1]
-            if arg.endswith('!'):
-                prompt_type = arg[0]
-                if prompt_type == '0':
-                    # trim trailing spaces from input command
-                    assert self.cursor == self.size()
-                    end = self.size() - 1
-                    assert self.substr(end) == '\n'
-                    in_end_pos = end
-                    while self.substr(in_end_pos - 1) == ' ':
-                        in_end_pos -= 1
-                    self.delete(in_end_pos, end)
-                    # update history
-                    assert self.substr(in_end_pos) == '\n'
-                    self.in_lines.append(
-                        (self.start_pos, in_end_pos + 1)
-                    )
-                    history = settings.get('gidterm_command_history')
-                    history.append(self.in_lines)
-                    settings.set('gidterm_command_history', history)
-                    self.in_lines = None
-                    self.cursor = self.size()
-                    self.start_pos = self.cursor
-                    self.out_start_time = now
-                    return
-                elif prompt_type == '2':
-                    assert self.cursor == self.size()
-                    end = self.size() - 1
-                    assert self.substr(end) == '\n'
-                    self.in_lines.append(
-                        (self.start_pos, end)
-                    )
-                    self.scope = 'sgr.magenta-on-default'
-                    self.cursor = self.write(self.cursor, '> ')
-                    self.scope = None
-                    self.start_pos = self.cursor
-                    return
-            else:
-                assert self.prompt_type is None, self.prompt_type
-                self.prompt_type = arg
-                self.prompt_text = ''
-                return
-        elif command == '~':
-            # end prompt
-            assert self.prompt_type == '1', self.prompt_type
-            ps1, status, virtualenv, pwd = self.prompt_text.split('@', 3)
-            self.ps1 = ps1
-            cursor = self.size()
-            col = self.rowcol(cursor)[1]
-            if col == 0:
-                if self.cursor == cursor:
-                    # cursor at end, with final newline
-                    ret_scope = 'sgr.green-on-default'
-                else:
-                    # cursor not at end
-                    ret_scope = 'sgr.red-on-default'
-            else:
-                if self.cursor == cursor:
-                    # cursor at end, but no final newline
-                    ret_scope = 'sgr.yellow-on-default'
-                else:
-                    # cursor not at end
-                    ret_scope = 'sgr.red-on-default'
-                cursor = self.write(cursor, '\n')
-            if pwd != self.pwd:
-                history = settings.get('gidterm_pwd')
-                history.append((cursor, pwd))
-                settings.set('gidterm_pwd', history)
-                self.pwd = pwd
-            self.set_title()
-            if self.out_start_time is not None:
-                # just finished displaying output
-                if status == '0':
-                    self.scope = 'sgr.green-on-default'
-                else:
-                    self.scope = 'sgr.red-on-default'
-                cursor = self.write(cursor, status)
-                info = _exit_status_info.get(status)
-                if info:
-                    self.scope = 'sgr.yellow-on-default'
-                    cursor = self.write(cursor, info)
-                self.scope = ret_scope
-                cursor = self.write(cursor, '\u23ce')
-                self.scope = None
-                elapsed = timedelta_seconds(now - self.out_start_time)
-                cursor = self.write(cursor, ' {}\n'.format(elapsed))
-                # Reset the output timestamp to None so that
-                # pressing enter for a blank line does not show
-                # an updated time since run
-                self.out_start_time = None
-            extra_line = False
-            if virtualenv:
-                self.scope = 'sgr.magenta-on-default'
-                cursor = self.write(cursor, '{}'.format(
-                    os.path.basename(virtualenv)
-                ))
-                extra_line = True
-            branch, state = get_vcs_branch(os.path.expanduser(pwd))
-            if branch:
-                if extra_line:
-                    cursor = self.write(cursor, ' ')
-                if state == 0:
-                    self.scope = 'sgr.green-on-default'
-                elif state == 1:
-                    self.scope = 'sgr.yellow-on-default'
-                else:
-                    self.scope = 'sgr.red-on-default'
-                cursor = self.write(cursor, '{}'.format(
-                    branch
-                ))
-                extra_line = True
-            self.scope = None
-            if extra_line:
-                cursor = self.write(cursor, '\n')
-            self.scope = 'sgr.brightblack-on-default'
-            cursor = self.write(cursor, '[{}]'.format(pwd))
-            self.scope = 'sgr.magenta-on-default'
-            self.cursor = self.write(cursor, '\n{} '.format(ps1))
-            self.scope = None
-            self.start_pos = self.cursor
-            self.in_lines = []
-            self.prompt_type = None
-            return
-        elif command == 'm':
+        if command == 'm':
             arg = part[2:-1]
             if not arg:
                 self.scope = None
@@ -952,7 +967,7 @@ class GidtermView(sublime.View):
                 pos = self.write(pos, '\n')
             self.cursor = pos
             return
-        print('gidterm: [WARN] unknown control: {!r}'.format(part))
+        print('gidterm: [WARN] unknown escape: {!r}'.format(part))
         self.cursor = self.write(self.cursor, part)
 
     def once(self):
