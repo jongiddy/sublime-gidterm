@@ -41,6 +41,7 @@ In terminal mode, change to browse mode using one of the following:
 In browse mode, change to terminal mode using one of the following:
 
 - Type any printing character, including `Enter`, `Tab`, `Backspace`, and `Delete`;
+- `Ctrl-Enter` to run a command with its output in a new tab;
 - `Ctrl-V` to insert the clipboard into the command prompt;
 - `Ctrl-Insert` to insert the clipboard into the command prompt with surrounding whitespace removed;
 - `Shift-Insert` to delete the contents of the command prompt and replace with the clipboard with surrounding whitespace removed;

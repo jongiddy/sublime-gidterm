@@ -91,8 +91,7 @@ class TestGidTermOnce(TestCase, GidTermTestHelper):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.view = gidterm.create_view(sublime.active_window(), self.tmpdir)
-        self.gview = gidterm.GidtermView(self.view.id())
-        gidterm._viewmap[self.view.id()] = self.gview
+        self.gview = gidterm.ShellTab(self.view.id())
         self.gview.start(None)
         # make sure we have a window to work with
         s = sublime.load_settings("Preferences.sublime-settings")
@@ -100,7 +99,7 @@ class TestGidTermOnce(TestCase, GidTermTestHelper):
 
     def tearDown(self):
         if self.gview:
-            self.gview.close()
+            self.gview.disconnect()
         if self.view:
             self.view.set_scratch(True)
             self.view.window().focus_view(self.view)
@@ -440,8 +439,7 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.view = gidterm.create_view(sublime.active_window(), self.tmpdir)
-        self.gview = gidterm.GidtermView(self.view.id())
-        gidterm._viewmap[self.view.id()] = self.gview
+        self.gview = gidterm.ShellTab(self.view.id())
         self.gview.start(50)
         # make sure we have a window to work with
         s = sublime.load_settings("Preferences.sublime-settings")
@@ -449,7 +447,7 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
 
     def tearDown(self):
         if self.gview:
-            self.gview.close()
+            self.gview.disconnect()
         if self.view:
             self.view.set_scratch(True)
             self.view.window().focus_view(self.view)
@@ -571,15 +569,14 @@ class TestGidTermContext(TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.view = gidterm.create_view(sublime.active_window(), self.tmpdir)
-        self.gview = gidterm.GidtermView(self.view.id())
-        gidterm._viewmap[self.view.id()] = self.gview
+        self.gview = gidterm.ShellTab(self.view.id())
         # make sure we have a window to work with
         s = sublime.load_settings("Preferences.sublime-settings")
         s.set("close_windows_when_empty", False)
 
     def tearDown(self):
         if self.gview:
-            self.gview.close()
+            self.gview.disconnect()
         if self.view:
             self.view.set_scratch(True)
             self.view.window().focus_view(self.view)
