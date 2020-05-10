@@ -7,7 +7,6 @@ import re
 import select
 import shlex
 import signal
-import subprocess
 import tempfile
 import time
 
@@ -25,10 +24,18 @@ export TERM_PROGRAM=Sublime-GidTerm
 if [ -r ~/.profile ]; then . ~/.profile; fi
 
 # Replace the settings needed for GidTerm to work, notably the prompt formats.
-export PROMPT_COMMAND='PS1=\\[\\e[1p\\]\\\$@\\[$?@${VIRTUAL_ENV}@\\w\\e[~\\]'
-export PROMPT_DIRTRIM=
-export PS0='\e[0!p'
-export PS2='\e[2!p'
+PROMPT_DIRTRIM=
+GIDTERM_PC=${PROMPT_COMMAND:-:}
+_gidterm_ps1 () {
+    status=$?
+    PS1="\$ ";
+    eval "${GIDTERM_PC}";
+    GIDTERM_PS1=$(echo "${PS1}" | sed "s/$(echo -e '\033')/\\\\e/g")
+    PS1="\\[\\e[1p${status}@\\w\\e[~\\e[5p\\]${GIDTERM_PS1}\\[\\e[~\\]";
+}
+PROMPT_COMMAND=_gidterm_ps1
+PS0='\e[0!p'
+PS2='\e[2!p'
 export TERM=ansi
 
 # Set LINES and COLUMNS to a standard size for commands run by the shell to
@@ -155,50 +162,8 @@ class Shell:
         return self.decoder.decode(os.read(self.fd, 4096))
 
 
-def get_vcs_branch(d):
-    # return branch, and a code for status
-    # 2 = dirty
-    # 1 = not synced with upstream
-    # 0 = synced with upstream
-    try:
-        out = subprocess.check_output(
-            ('git', 'branch', '--contains', 'HEAD'),
-            cwd=d,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-        ).strip()
-        lines = out.split('\n')
-        for s in lines:
-            if s[0] == '*':
-                branch = s[1:].strip()
-                break
-        else:
-            return None, 0
-        out = subprocess.check_output(
-            ('git', 'status', '--porcelain', '--untracked-files=no'),
-            cwd=d,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-        )
-        for line in out.split('\n'):
-            state = line[:2]
-            if state.strip():
-                # any other state apart from '  '
-                return branch, 2
-        return branch, 0
-    except FileNotFoundError:
-        # git command not in path
-        pass
-    except subprocess.CalledProcessError as e:
-        if 'not a git repository' in e.output:
-            pass
-        else:
-            print('gidterm: [WARN] {}: {}'.format(e, e.output))
-    return None, 0
-
-
-def timedelta_seconds(td):
-    s = int(round(td.total_seconds()))
+def timedelta_seconds(seconds):
+    s = int(round(seconds))
     return timedelta(seconds=s)
 
 
@@ -396,6 +361,10 @@ class OutputView(sublime.View):
         self.write(part)
 
     def handle_escape(self, part):
+        if part[1] != '[':
+            assert part[1] in '()*+]', part
+            # ignore codeset and set-title
+            return
         command = part[-1]
         if command == 'm':
             arg = part[2:-1]
@@ -413,6 +382,9 @@ class OutputView(sublime.View):
                     bg = 'default'
                 elif num in ('1', '01', '2', '02', '22'):
                     # TODO: handle bold/faint intensity
+                    pass
+                elif num.startswith('1') and len(num) == 2:
+                    # TODO: handle these
                     pass
                 elif num == '30':
                     fg = 'black'
@@ -793,15 +765,20 @@ class OutputTab(OutputView):
 class ShellTab(OutputView):
 
     _escape_pat = re.compile(
-        r'(\x07|'                                       # BEL
-        r'(?:\x08+)|'                                   # BACKSPACE's
-        r'(?:\r+)|'                                     # CR's
+        r'('
+        r'\x07|'                                        # BEL
+        r'\x08+|'                                       # BACKSPACE's
+        r'\r+|'                                         # CR's
         r'\n|'                                          # NL
-        r'(?:\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]))'  # CSI
+        r'\x1b(?:'                                      # Escapes:
+        r'[()*+]B|'                                     # - codeset
+        r'\]0;.*?(?:\x07|\x1b\\)|'                      # - set title
+        r'\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]'        # - CSI
+        r'))'
     )
 
     _partial_pat = re.compile(
-        r'\x1b(\[[\x30-\x3f]*[\x20-\x2f]*)?$'           # CSI
+        r'\x1b([()*+]|\](?:0;?)?.*|\[[\x30-\x3f]*[\x20-\x2f]*)?$'
     )
 
     def __init__(self, view_id):
@@ -809,8 +786,7 @@ class ShellTab(OutputView):
         _viewmap[view_id] = self
         history = self.settings().get('gidterm_pwd')
         self.pwd = history[-1][1]
-        self.ps1 = '$'
-        self.label = None
+        self.label = ''
         self.set_title()
 
         # `cursor` is the location of the input cursor. It is often the end of
@@ -832,30 +808,20 @@ class ShellTab(OutputView):
 
     def get_label(self, size):
         label = self.label
-        if self.label is None:
-            size -= len(self.ps1) + 1  # prompt + space
-            pwd = self.pwd
-            if len(pwd) > size:
-                if size < 2:
-                    label = ELLIPSIS
-                else:
-                    # reduce size by 2 characters for ellipsis, but
-                    # remove the space, so we get one back.
-                    label = ELLIPSIS + pwd[1 - size:]
+        if len(label) <= size - 2:
+            label = '$ ' + label
+            alt1 = self.pwd + label
+            if len(alt1) <= size:
+                label = alt1
             else:
-                expanded = os.path.expanduser(pwd)
-                if len(expanded) <= size:
-                    label = expanded
-                else:
-                    label = pwd
-                label = ' ' + label
-            label = self.ps1 + label
+                alt2 = os.path.basename(self.pwd) + label
+                if len(alt2) <= size:
+                    label = alt2
         else:
-            if len(label) > size:
-                if size < 2:
-                    label = ''
-                else:
-                    label = label[:size - 2] + ELLIPSIS
+            if size < 5:
+                label = '$'
+            else:
+                label = '$ ' + label[:size - 4] + ELLIPSIS
         return label
 
     def disconnect(self):
@@ -929,25 +895,25 @@ class ShellTab(OutputView):
         plain = False
         for part in parts:
             plain = not plain
-            if plain:
-                # If we have plaintext, it is either real plaintext or the
-                # internal part of a PS1 shell prompt.
-                if part:
-                    if self.prompt_type is None:
+            if self.prompt_type is None:
+                if plain:
+                    if part:
                         self.output.write(part)
-                    else:
-                        self.prompt_text += part
-            else:
-                if part[0] == '\x1b':
-                    command = part[-1]
-                    if command == 'p':
-                        self.handle_prompt(part, now)
-                    elif command == '~':
-                        self.handle_prompt_end(part, now)
-                    else:
-                        self.output.handle_escape(part)
                 else:
-                    self.output.handle_control(part)
+                    if part[0] == '\x1b':
+                        command = part[-1]
+                        if command == 'p':
+                            self.handle_prompt(part, now)
+                        else:
+                            self.output.handle_escape(part)
+                    else:
+                        self.output.handle_control(part)
+            else:
+                if not plain and part == '\x1b[~':
+                    self.handle_prompt_end(part, now)
+                else:
+                    self.prompt_text += part
+
         self.output.move_cursor()
 
     def handle_prompt(self, part, now):
@@ -980,10 +946,10 @@ class ShellTab(OutputView):
                         for b, e in self.in_lines
                     ]
                 )
-                words = command.split()
+                words = shlex.split(command.strip())
                 if '/' in words[0]:
                     words[0] = words[0].rsplit('/', 1)[-1]
-                label = ' '.join(words)
+                label = ' '.join(shlex.quote(word) for word in words)
                 self.in_lines = None
                 self.output.cursor = self.size()
                 self.output.home = self.cursor
@@ -1039,90 +1005,88 @@ class ShellTab(OutputView):
 
     def handle_prompt_end(self, part, now):
         # end prompt
-        assert self.prompt_type == '1', self.prompt_type
-        # output ends, command input starts
-        ps1, status, virtualenv, pwd = self.prompt_text.split('@', 3)
-        self.ps1 = ps1
-        output_end = self.output.size()
-        col = self.output.rowcol(output_end)[1]
-        if self.output.cursor == output_end:
-            if col == 0:
-                # cursor at end, with final newline
-                ret_scope = 'sgr.green-on-default'
+        if self.prompt_type == '1':
+            # output ends, command input starts
+            status, pwd = self.prompt_text.split('@', 1)
+            output_end = self.output.size()
+            col = self.output.rowcol(output_end)[1]
+            if self.output.cursor == output_end:
+                if col == 0:
+                    # cursor at end, with final newline
+                    ret_scope = 'sgr.green-on-default'
+                else:
+                    # cursor at end, but no final newline
+                    ret_scope = 'sgr.yellow-on-default'
             else:
-                # cursor at end, but no final newline
-                ret_scope = 'sgr.yellow-on-default'
+                # cursor not at end
+                ret_scope = 'sgr.red-on-default'
+            if self.out_start_time is not None:
+                elapsed = timedelta_seconds(
+                    (now - self.out_start_time).total_seconds()
+                )
+            if self.output != self:
+                self.output.display_status(status, ret_scope, elapsed)
+            # Switch to default output
+            self.output = self
+            if pwd != self.pwd:
+                settings = self.settings()
+                history = settings.get('gidterm_pwd')
+                history.append((output_end, pwd))
+                settings.set('gidterm_pwd', history)
+                self.pwd = pwd
+            if self.out_start_time is None:
+                # enter pressed with no command
+                self.label = ''
+                title = ''
+            else:
+                # finished displaying output of command
+                self.display_status(status, ret_scope, elapsed)
+                # Reset the output timestamp to None so that
+                # pressing enter for a blank line does not show
+                # an updated time since run
+                self.out_start_time = None
+                title = status
+            self.set_title(title)
+            self.set_scope(None)
         else:
-            # cursor not at end
-            ret_scope = 'sgr.red-on-default'
-        if self.out_start_time is not None:
-            elapsed = timedelta_seconds(now - self.out_start_time)
-        if self.output != self:
-            self.output.display_status(status, ret_scope, elapsed)
-        # Switch to default output
-        self.output = self
-        if pwd != self.pwd:
-            settings = self.settings()
-            history = settings.get('gidterm_pwd')
-            history.append((output_end, pwd))
-            settings.set('gidterm_pwd', history)
-            self.pwd = pwd
-        self.label = None
-        self.set_title()
-        if self.out_start_time is not None:
-            # just finished displaying output
-            self.output.display_status(status, ret_scope, elapsed)
-            # Reset the output timestamp to None so that
-            # pressing enter for a blank line does not show
-            # an updated time since run
-            self.out_start_time = None
-        extra_line = False
-        if virtualenv:
-            self.output.set_scope('sgr.magenta-on-default')
-            self.output.write(os.path.basename(virtualenv))
-            extra_line = True
-        branch, state = get_vcs_branch(os.path.expanduser(pwd))
-        if branch:
-            if extra_line:
-                self.output.write(' ')
-            if state == 0:
-                self.output.set_scope('sgr.green-on-default')
-            elif state == 1:
-                self.output.set_scope('sgr.yellow-on-default')
-            else:
-                self.output.set_scope('sgr.red-on-default')
-            self.output.write(branch)
-            extra_line = True
-        self.output.set_scope(None)
-        if extra_line:
-            self.output.write('\n')
-        self.output.set_scope('sgr.brightblack-on-default')
-        self.output.write('[{}]'.format(pwd))
-        self.output.set_scope('sgr.magenta-on-default')
-        self.output.write('\n{} '.format(ps1))
-        self.output.set_scope(None)
-        self.output.home = self.output.cursor
+            assert self.prompt_type == '5', self.prompt_type
+            ps1 = self.prompt_text
+            parts = self._escape_pat.split(ps1)
+            plain = False
+            for part in parts:
+                plain = not plain
+                if plain:
+                    if part:
+                        self.write(part)
+                else:
+                    if part[0] == '\x1b':
+                        self.handle_escape(part)
+                    else:
+                        self.handle_control(part)
+
+        self.home = self.cursor
         self.in_lines = []
         self.prompt_type = None
+
+    def set_time(self):
+        now = datetime.now(timezone.utc)
+        if self.out_start_time is not None:
+            elapsed = (now - self.out_start_time).total_seconds()
+            if elapsed > 0.2:
+                # don't show time immediately, to avoid flashing
+                self.output.set_title(timedelta_seconds(elapsed))
+        return now
 
     def once(self):
         if self.shell is not None:
             if self.shell.ready():
                 s = self.shell.receive()
                 if s:
-                    now = datetime.now(timezone.utc)
-                    if self.out_start_time is not None:
-                        elapsed = timedelta_seconds(
-                            now - self.out_start_time
-                        )
-                        self.output.set_title(elapsed)
+                    now = self.set_time()
                     self.handle_output(s, now)
                     return True
             else:
-                now = datetime.now(timezone.utc)
-                if self.out_start_time is not None:
-                    elapsed = timedelta_seconds(now - self.out_start_time)
-                    self.output.set_title(elapsed)
+                self.set_time()
                 return False
 
         return None
@@ -1131,7 +1095,7 @@ class ShellTab(OutputView):
         try:
             next = self.once()
             if next is True:
-                sublime.set_timeout(self.loop, 1)
+                sublime.set_timeout(self.loop, 10)
             elif next is False:
                 sublime.set_timeout(self.loop, 50)
             else:
@@ -1275,6 +1239,15 @@ _terminal_capability_map = {
     'kpp': '',              # previous-page
     'kRIT': '',             # shift-cursor-right
     'nel': '\r\x1b[S',      # newline
+    'kDC2': '\x1b[P',       # shift-delete
+    'kDN2': '',             # shift-cursor-down
+    'kEND2': '',            # shift-End
+    'kHOM2': '',            # shift-Home
+    'kLFT2': '',            # shift-cursor-left
+    'kNXT2': '',            # shift-Page-Down
+    'kPRV2': '',            # shift-Page-Up
+    'kRIT2': '',            # shift-cursor-right
+    'kUP2': '',             # shift-cursor-up
 }
 
 

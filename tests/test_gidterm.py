@@ -1,6 +1,7 @@
 import codecs
 from datetime import timedelta
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -52,14 +53,14 @@ class TestTimeDeltaSeconds(TestCase):
         actual = timedelta(seconds=3, milliseconds=450)
         self.assertEqual(
             '0:00:03',
-            str(gidterm.timedelta_seconds(actual))
+            str(gidterm.timedelta_seconds(actual.total_seconds()))
         )
 
     def test_high_fraction(self):
         actual = timedelta(seconds=3, milliseconds=550)
         self.assertEqual(
             '0:00:04',
-            str(gidterm.timedelta_seconds(actual))
+            str(gidterm.timedelta_seconds(actual.total_seconds()))
         )
 
 
@@ -126,10 +127,11 @@ class TestGidTermOnce(TestCase, GidTermTestHelper):
         # Send command to terminal. Once this returns, we can be sure that
         # we're not at the initial prompt, so it is safe to call
         # `wait_for_prompt` immediately to wait for the command to complete.
-        # We also attempt to ensure that the entire command (except the
-        # trailing newline) has been echoed.
+        # We also ensure that the entire command (except the trailing newline)
+        # has been echoed and received.
         start = time.time()
         self.wait_for_prompt(timeout)
+        c0 = self.single_cursor()
         self.view.run_command('gidterm_send', {'characters': command})
         self.gview.once()
         while self.gview.at_prompt():
@@ -138,14 +140,15 @@ class TestGidTermOnce(TestCase, GidTermTestHelper):
             time.sleep(0.1)
             self.gview.once()
         self.wait_for_idle(start + timeout - time.time())
+        c1 = self.single_cursor()
+        # any CR in input is replaced by newline and PS2 prompt
+        expected = command.replace('\r', '\n> ')
+        self.assertEqual(expected, self.view.substr(sublime.Region(c0, c1)))
         self.view.run_command('gidterm_send_cap', {'cap': 'cr'})
 
     def test_at_prompt(self):
         self.wait_for_prompt()
         self.assertTrue(self.gview.at_prompt())
-        end = self.view.size()
-        last = self.view.substr(sublime.Region(end - 3, end))
-        self.assertEqual('\n$ ', last, repr(last))
         self.send_command('sleep 1')
         time.sleep(0.2)
         self.gview.once()
@@ -155,14 +158,32 @@ class TestGidTermOnce(TestCase, GidTermTestHelper):
         self.wait_for_prompt()
         self.assertTerminalMode()
 
+    def assert_exit_code(self, code, output):
+        # In the output there is a line that starts with the status code
+        # and includes the Enter symbol in it.
+        match = re.search(
+            r'^{}[^0-9\n]??.*?\u23ce '.format(code), output, re.MULTILINE
+        )
+        self.assertTrue(match, output)
+        # $? contains the same code
+        self.assertTrue(self.gview.at_prompt())
+        command = 'echo $?'
+        self.send_command(command)
+        c1 = self.single_cursor()
+        self.wait_for_prompt()
+        c2 = self.single_cursor()
+        output = self.view.substr(sublime.Region(c1, c2))
+        self.assertTrue(
+            output.startswith('\n{}\n'.format(code)),
+            repr(self.all_contents())
+        )
+
     def test_echo(self):
         self.wait_for_prompt()
         self.assertTerminalMode()
-        c0 = self.single_cursor()
         command = 'echo Hello World!'
         self.send_command(command)
         c1 = self.single_cursor()
-        self.assertEqual(command, self.view.substr(sublime.Region(c0, c1)))
         self.wait_for_prompt()
         c2 = self.single_cursor()
         output = self.view.substr(sublime.Region(c1, c2))
@@ -170,16 +191,38 @@ class TestGidTermOnce(TestCase, GidTermTestHelper):
             output.startswith('\nHello World!\n'),
             repr(self.all_contents())
         )
+        self.assert_exit_code('0', output)
+
+    def test_fail(self):
+        self.wait_for_prompt()
         self.assertTerminalMode()
+        command = "sh -c 'exit 4'"
+        self.send_command(command)
+        c1 = self.single_cursor()
+        self.wait_for_prompt()
+        c2 = self.single_cursor()
+        output = self.view.substr(sublime.Region(c1, c2))
+        self.assert_exit_code('4', output)
+
+    def test_signal(self):
+        self.wait_for_prompt()
+        self.assertTerminalMode()
+        command = 'sleep 30'
+        self.send_command(command)
+        c1 = self.single_cursor()
+        time.sleep(0.5)
+        self.view.run_command('gidterm_send', {'characters': '\x03'})
+        self.wait_for_prompt()
+        c2 = self.single_cursor()
+        output = self.view.substr(sublime.Region(c1, c2))
+        self.assert_exit_code('130', output)
 
     def test_extra_whitespace(self):
         self.wait_for_prompt()
         self.assertTerminalMode()
-        c0 = self.single_cursor()
         command = '  echo  Hello  World!  '
         self.send_command(command)
         c1 = self.single_cursor()
-        self.assertEqual(command, self.view.substr(sublime.Region(c0, c1)))
         self.wait_for_prompt()
         c1 -= 2  # GidTerm will remove the trailing spaces
         c2 = self.single_cursor()
