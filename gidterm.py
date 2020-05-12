@@ -1,5 +1,6 @@
 import codecs
 from datetime import datetime, timedelta, timezone
+import errno
 import glob
 import os
 import pty
@@ -17,7 +18,7 @@ import sublime_plugin
 _viewmap = {}
 
 
-profile = br'''
+_initial_profile = r'''
 # Read the standard profile, to give a familiar environment.  The profile can
 # detect that it is in GidTerm using the `TERM_PROGRAM` environment variable.
 export TERM_PROGRAM=Sublime-GidTerm
@@ -25,15 +26,26 @@ if [ -r ~/.profile ]; then . ~/.profile; fi
 
 # Replace the settings needed for GidTerm to work, notably the prompt formats.
 PROMPT_DIRTRIM=
-GIDTERM_PC=${PROMPT_COMMAND:-:}
 _gidterm_ps1 () {
     status=$?
+    old_prompt_command=$1
     PS1="\$ ";
-    eval "${GIDTERM_PC}";
-    GIDTERM_PS1=$(echo "${PS1}" | sed "s/$(echo -e '\033')/\\\\e/g")
-    PS1="\\[\\e[1p${status}@\\w\\e[~\\e[5p\\]${GIDTERM_PS1}\\[\\e[~\\]";
+    eval "${old_prompt_command}";
+    PS1="\\[\\e[1p${status}@\\w\\e[~\\e[5p\\]${PS1}\\[\\e[~\\]";
+    tmpfile=${GIDTERM_CACHE}.$$;
+    {
+        shopt -p &&
+        declare -p | grep -v '^declare -[a-qs-z]*r' &&
+        declare -f &&
+        alias -p;
+    } > ${tmpfile} && mv ${tmpfile} ${GIDTERM_CACHE};
 }
-PROMPT_COMMAND=_gidterm_ps1
+# The old `PROMPT_COMMAND` may be a function that, on reload, has not been
+# declared when `_gidterm_ps1` is being declared.  If `${GIDTERM_PC}` appears
+# directly in the `_gidterm_ps1` declaration, the undefined function can cause
+# an error. Instead we pass the old `PROMPT_COMMAND` as a parameter.
+GIDTERM_PC=${PROMPT_COMMAND:-:}
+PROMPT_COMMAND='_gidterm_ps1 "${GIDTERM_PC}"'
 PS0='\e[0!p'
 PS2='\e[2!p'
 export TERM=ansi
@@ -96,7 +108,6 @@ class Shell:
     def __init__(self):
         self.pid = None
         self.fd = None
-        self.path = None
         utf8_decoder_factory = codecs.getincrementaldecoder('utf8')
         self.decoder = utf8_decoder_factory(errors='gidterm')
 
@@ -107,23 +118,14 @@ class Shell:
         if self.fd is not None:
             os.close(self.fd)
             self.fd = None
-        if self.path is not None:
-            os.unlink(self.path)
-            self.path = None
         if self.pid is not None:
             pid, status = os.waitpid(self.pid, 0)
             if os.WIFEXITED(status) or os.WIFSIGNALED(status):
                 self.pid = None
 
-    def fork(self, workdir):
-        fd, self.path = tempfile.mkstemp()
-        try:
-            os.write(fd, profile)
-        finally:
-            os.close(fd)
-
+    def fork(self, workdir, init_file):
         args = [
-            'bash', '--rcfile', self.path
+            'bash', '--rcfile', init_file
         ]
         env = os.environ.update({
             # If COLUMNS is the default of 80, the shell will break long
@@ -159,7 +161,13 @@ class Shell:
         return fd in rfds
 
     def receive(self):
-        return self.decoder.decode(os.read(self.fd, 4096))
+        try:
+            buf = os.read(self.fd, 8192)
+        except OSError as e:
+            if e.errno == errno.EIO:
+                return self.decoder.decode(b'', final=True)
+            raise
+        return self.decoder.decode(buf, final=not buf)
 
 
 def timedelta_seconds(seconds):
@@ -855,8 +863,9 @@ class ShellTab(OutputView):
             self.shell.send(s)
 
     def start(self, wait):
+        init_file = self.settings().get('gidterm_init_file')
         self.shell = Shell()
-        self.shell.fork(os.path.expanduser(self.pwd))
+        self.shell.fork(os.path.expanduser(self.pwd), init_file)
         self.output = self
         _set_terminal_mode(self)
         self.move_cursor()
@@ -1178,6 +1187,12 @@ def create_view(window, pwd):
     settings.set('is_gidterm', True)
     settings.set('gidterm_command_history', [])
     settings.set('gidterm_pwd', [(0, pwd)])
+    cachedir = os.path.expanduser('~/.cache/sublime-gidterm/profile')
+    os.makedirs(cachedir, exist_ok=True)
+    with tempfile.NamedTemporaryFile('w', dir=cachedir, delete=False) as f:
+        f.write('GIDTERM_CACHE={}\n'.format(f.name))
+        f.write(_initial_profile)
+    settings.set('gidterm_init_file', f.name)
     return view
 
 
@@ -1696,6 +1711,9 @@ class GidtermListener(sublime_plugin.ViewEventListener):
         gview = _viewmap.get(view_id)
         if gview:
             del _viewmap[view_id]
+        init_file = self.view.settings().get('gidterm_init_file')
+        if init_file:
+            os.unlink(init_file)
 
     def on_selection_modified(self):
         regions = list(self.view.sel())

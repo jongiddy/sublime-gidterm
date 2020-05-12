@@ -606,6 +606,25 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
         self.assertEqual(c1, region.begin())
         self.assertEqual(command + '\n', self.view.substr(region))
 
+    def test_reload_environment(self):
+        """
+        Reconnection can access environment before disconnection.
+        """
+        self.wait_for_prompt()
+        self.assertTerminalMode()
+        command = 'export TEST_VAR=5'
+        self.send_command(command)
+        self.wait_for_prompt()
+        self.disconnect_reload()
+        self.assertTerminalMode()
+        command = 'echo $TEST_VAR'
+        c1 = self.single_cursor()
+        self.send_command(command)
+        self.wait_for_prompt()
+        c2 = self.single_cursor()
+        output = self.view.substr(sublime.Region(c1, c2))
+        self.assertIn('\n5\n', output, output)
+
 
 class TestGidTermContext(TestCase):
 
