@@ -1547,33 +1547,62 @@ def get_pwd(history, region):
 def get_line_col(view, pos):
     ch = view.substr(pos)
     if ch == ':':
-        # PATH:LINE:COL
-        pos += 1
-        line = view.substr(pos)
-        if line not in '0123456789':
-            return None
         pos += 1
         ch = view.substr(pos)
-        while ch in '0123456789':
-            line += ch
+        if ch == ' ':
             pos += 1
             ch = view.substr(pos)
-        if ch != ':':
-            return (line, 0)
-        pos += 1
-        col = view.substr(pos)
-        if col not in '0123456789':
-            return (line, 0)
-        pos += 1
-        ch = view.substr(pos)
-        while ch in '0123456789':
-            col += ch
+            if ch == 'l':
+                if view.substr(sublime.Region(pos + 1, pos + 5)) == 'ine ':
+                    # Bash: PATH: line LINE:
+                    pos += 5
+                    line = view.substr(pos)
+                    if line not in '0123456789':
+                        return None
+                    pos += 1
+                    ch = view.substr(pos)
+                    while ch in '0123456789':
+                        line += ch
+                        pos += 1
+                        ch = view.substr(pos)
+                    return (line, 0)
+            elif ch in '0123456789':
+                # Bash: PATH: LINE:
+                line = ch
+                pos += 1
+                ch = view.substr(pos)
+                while ch in '0123456789':
+                    line += ch
+                    pos += 1
+                    ch = view.substr(pos)
+                if ch == ':':
+                    return (line, 0)
+        elif ch in '0123456789':
+            # PATH:LINE[:COL]
+            line = ch
             pos += 1
             ch = view.substr(pos)
-        return (line, col)
+            while ch in '0123456789':
+                line += ch
+                pos += 1
+                ch = view.substr(pos)
+            if ch != ':':
+                return (line, 0)
+            pos += 1
+            col = view.substr(pos)
+            if col not in '0123456789':
+                return (line, 0)
+            pos += 1
+            ch = view.substr(pos)
+            while ch in '0123456789':
+                col += ch
+                pos += 1
+                ch = view.substr(pos)
+            return (line, col)
+        return None
     elif ch == '"':
         if view.substr(sublime.Region(pos + 1, pos + 8)) == ', line ':
-            # Python: PATH", line LINE,
+            # Python: "PATH", line LINE,
             pos += 8
             line = view.substr(pos)
             if line not in '0123456789':
