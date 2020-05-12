@@ -840,30 +840,21 @@ class ShellTab(OutputView):
         _set_browse_mode(self)
 
     def send(self, s, new_tab=False):
-        if self.disconnected:
-            if s == _terminal_capability_map['cr']:
-                self.disconnected = False
-                self.shell = Shell()
-                self.start(50)
-                self.set_scope(None)
-        elif self.shell is None:
-            _set_browse_mode(self)
-            self.set_scope('sgr.red-on-default')
-            cursor = self.cursor = self.size()
-            if self.rowcol(cursor)[1] != 0:
-                self.write('\n')
-            self.write(
-                '(disconnected - press Enter to restart)\n'
-            )
-            self.disconnected = True
-        else:
-            self.new_tab = new_tab
-            if _set_terminal_mode(self):
-                self.move_cursor()
-            self.shell.send(s)
+        if self.shell is None:
+            self.shell = Shell()
+            self.start(50)
+        self.new_tab = new_tab
+        if _set_terminal_mode(self):
+            self.move_cursor()
+        self.shell.send(s)
 
     def start(self, wait):
-        init_file = self.settings().get('gidterm_init_file')
+        settings = self.settings()
+        init_file = settings.get('gidterm_init_file')
+        if not os.path.exists(init_file):
+            init_script = settings.get('gidterm_init')
+            init_file = create_init_file(init_script)
+            settings.set('gidterm_init_file', init_file)
         self.shell = Shell()
         self.shell.fork(os.path.expanduser(self.pwd), init_file)
         self.output = self
@@ -1156,6 +1147,15 @@ class GidtermEraseTextCommand(sublime_plugin.TextCommand):
         self.view.erase(edit, region)
 
 
+def create_init_file(contents):
+    cachedir = os.path.expanduser('~/.cache/sublime-gidterm/profile')
+    os.makedirs(cachedir, exist_ok=True)
+    with tempfile.NamedTemporaryFile('w', dir=cachedir, delete=False) as f:
+        f.write(contents)
+        f.write('declare -- GIDTERM_CACHE="{}"\n'.format(f.name))
+        return f.name
+
+
 def _get_package_location(winvar):
     packages = winvar['packages']
     this_package = os.path.dirname(__file__)
@@ -1187,12 +1187,7 @@ def create_view(window, pwd):
     settings.set('is_gidterm', True)
     settings.set('gidterm_command_history', [])
     settings.set('gidterm_pwd', [(0, pwd)])
-    cachedir = os.path.expanduser('~/.cache/sublime-gidterm/profile')
-    os.makedirs(cachedir, exist_ok=True)
-    with tempfile.NamedTemporaryFile('w', dir=cachedir, delete=False) as f:
-        f.write('GIDTERM_CACHE={}\n'.format(f.name))
-        f.write(_initial_profile)
-    settings.set('gidterm_init_file', f.name)
+    settings.set('gidterm_init_file', create_init_file(_initial_profile))
     return view
 
 
@@ -1742,6 +1737,9 @@ class GidtermListener(sublime_plugin.ViewEventListener):
             del _viewmap[view_id]
         init_file = self.view.settings().get('gidterm_init_file')
         if init_file:
+            with open(init_file) as f:
+                init_script = f.read()
+            self.view.settings().set('gidterm_init', init_script)
             os.unlink(init_file)
 
     def on_selection_modified(self):

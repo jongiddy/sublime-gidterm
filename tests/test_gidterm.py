@@ -526,20 +526,15 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
         self.view.run_command('gidterm_send', {'characters': '\x04'})  # Ctrl-D
         time.sleep(0.2)
         self.assertBrowseMode()
-        self.view.run_command('gidterm_send', {'characters': 'e'})
-        time.sleep(0.2)
-        self.assertBrowseMode()
         self.view.run_command('gidterm_send_cap', {'cap': 'cr'})
         self.assertIs(gidterm._viewmap[self.view.id()], self.gview)
         self.wait_for_prompt()
 
     def disconnect_reload(self):
-        # Using `sublime_plugin.reload_plugin('sublime-gidterm')` doesn't seem
-        # to work, so empty the module global `_viewmap` instead.
-        gidterm._viewmap = {}
-        self.view.run_command('gidterm_send', {'characters': 'e'})
-        time.sleep(0.2)
-        self.assertBrowseMode()
+        # When switching projects, each view gets its `on_close` handler run.
+        for view in list(gidterm._viewmap.values()):
+            listener = gidterm.GidtermListener(self.view)
+            listener.on_close()
         self.view.run_command('gidterm_send_cap', {'cap': 'cr'})
         self.assertIsNot(gidterm._viewmap[self.view.id()], self.gview)
         self.gview = gidterm._viewmap[self.view.id()]
@@ -606,6 +601,33 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
         self.assertEqual(c1, region.begin())
         self.assertEqual(command + '\n', self.view.substr(region))
 
+    def test_reconnect_environment(self):
+        """
+        Reconnection can access environment before disconnection.
+        """
+        self.wait_for_prompt()
+        self.assertTerminalMode()
+        command = 'export TEST_VAR=5'
+        self.send_command(command)
+        self.wait_for_prompt()
+        init_file = self.view.settings().get('gidterm_init_file')
+        with open(init_file) as f:
+            init_script = f.read()
+        self.assertIn('TEST_VAR="5"', init_script, init_script)
+        self.disconnect_reconnect()
+        init_file = self.view.settings().get('gidterm_init_file')
+        with open(init_file) as f:
+            init_script = f.read()
+        self.assertIn('TEST_VAR="5"', init_script, init_script)
+        self.assertTerminalMode()
+        command = 'echo $TEST_VAR'
+        c1 = self.single_cursor()
+        self.send_command(command)
+        self.wait_for_prompt()
+        c2 = self.single_cursor()
+        output = self.view.substr(sublime.Region(c1, c2))
+        self.assertIn('\n5\n', output, output)
+
     def test_reload_environment(self):
         """
         Reconnection can access environment before disconnection.
@@ -615,7 +637,17 @@ class TestGidTermLoop(TestCase, GidTermTestHelper):
         command = 'export TEST_VAR=5'
         self.send_command(command)
         self.wait_for_prompt()
+        init_file = self.view.settings().get('gidterm_init_file')
+        with open(init_file) as f:
+            init_script = f.read()
+        self.assertIn('TEST_VAR="5"', init_script, init_script)
         self.disconnect_reload()
+        init_script = self.view.settings().get('gidterm_init')
+        self.assertIn('TEST_VAR="5"', init_script, init_script)
+        init_file = self.view.settings().get('gidterm_init_file')
+        with open(init_file) as f:
+            init_script = f.read()
+        self.assertIn('TEST_VAR="5"', init_script, init_script)
         self.assertTerminalMode()
         command = 'echo $TEST_VAR'
         c1 = self.single_cursor()
