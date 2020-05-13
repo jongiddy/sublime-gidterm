@@ -1165,7 +1165,7 @@ def _get_package_location(winvar):
     return this_package[len(unwanted) + 1:]
 
 
-def create_view(window, pwd):
+def create_view(window, pwd, init_script):
     winvar = window.extract_variables()
     package = _get_package_location(winvar)
     if pwd is None:
@@ -1187,19 +1187,31 @@ def create_view(window, pwd):
     settings.set('is_gidterm', True)
     settings.set('gidterm_command_history', [])
     settings.set('gidterm_pwd', [(0, pwd)])
-    settings.set('gidterm_init_file', create_init_file(_initial_profile))
+    settings.set('gidterm_init_file', create_init_file(init_script))
     return view
 
 
 class GidtermCommand(sublime_plugin.TextCommand):
     def run(self, edit):
-        filename = self.view.file_name()
-        if filename is None:
-            pwd = None
+        settings = self.view.settings()
+        if settings.get('is_gidterm'):
+            # If the current view is a GidTerm, use the same
+            # pwd, configuration, and environment
+            pwd = settings.get('gidterm_pwd')[-1][1]
+            init_file = settings.get('gidterm_init_file')
+            with open(init_file) as f:
+                init_script = f.read()
         else:
-            pwd = os.path.dirname(filename)
+            # If the current view has a filename, use the same
+            # pwd. Use the initial configuration and environment.
+            filename = self.view.file_name()
+            if filename is None:
+                pwd = None
+            else:
+                pwd = os.path.dirname(filename)
+            init_script = _initial_profile
         window = self.view.window()
-        view = create_view(window, pwd)
+        view = create_view(window, pwd, init_script)
         window.focus_view(view)
         view_id = view.id()
         gview = ShellTab(view_id)
@@ -1736,7 +1748,7 @@ class GidtermListener(sublime_plugin.ViewEventListener):
         if gview:
             del _viewmap[view_id]
         init_file = self.view.settings().get('gidterm_init_file')
-        if init_file:
+        if init_file and os.path.exists(init_file):
             with open(init_file) as f:
                 init_script = f.read()
             self.view.settings().set('gidterm_init', init_script)
