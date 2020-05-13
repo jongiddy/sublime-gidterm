@@ -624,7 +624,7 @@ class OutputView(sublime.View):
                     'move', {"by": "characters", "forward": False}
                 )
             return
-        if command == 'H':
+        if command in ('H', 'f'):
             # home
             arg = part[2:-1]
             if not arg:
@@ -696,7 +696,7 @@ class OutputView(sublime.View):
             end = self.cursor + n
             self.delete(self.cursor, end)
             return
-        if command in ('E', 'F', 'G', 'H', 'J', 'f'):
+        if command in ('E', 'F', 'G', 'J'):
             # we don't handle other cursor movements, since we lie
             # about the screen width, so apps will get confused. We
             # ensure we are at the start of a line when we see them.
