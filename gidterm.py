@@ -730,46 +730,6 @@ class OutputView(sublime.View):
         self.write(' {}\n'.format(elapsed))
 
 
-class OutputTab(OutputView):
-
-    def __init__(self, view_id, shell, label):
-        super().__init__(view_id)
-        _viewmap[view_id] = self
-        self.shell = shell
-        self.label = label
-
-    def get_label(self, size):
-        label = self.label
-        if len(label) > size:
-            if size < 2:
-                label = ''
-            else:
-                label = label[:size - 2] + ELLIPSIS
-        return label
-
-    def disconnect(self):
-        self.shell = None
-        _set_browse_mode(self)
-
-    def send(self, s, new_tab=False):
-        if self.shell is not None:
-            if not self.shell.send(s):
-                self.disconnect()
-                self.set_title('!')
-                self.cursor = self.size()
-                if self.rowcol(self.cursor)[1] != 0:
-                    self.write('\n')
-                self.set_scope('sgr.red-on-default')
-                self.write('(disconnected)')
-
-    def display_status(self, status, ret_scope, elapsed):
-        super().display_status(status, ret_scope, elapsed)
-        title = _exit_status_info.get(status, status)
-        self.set_title(title)
-        self.set_read_only(False)
-        self.disconnect()
-
-
 class ShellTab(OutputView):
 
     _escape_pat = re.compile(
@@ -809,8 +769,6 @@ class ShellTab(OutputView):
         self.shell = None
         self.disconnected = False
         self.loop_active = False
-        self.output = None
-        self.new_tab = False
 
         _set_browse_mode(self)
 
@@ -836,14 +794,12 @@ class ShellTab(OutputView):
         if self.shell is not None:
             self.shell.close()
             self.shell = None
-        self.output = None
         _set_browse_mode(self)
 
-    def send(self, s, new_tab=False):
+    def send(self, s):
         if self.shell is None:
             self.shell = Shell()
             self.start(50)
-        self.new_tab = new_tab
         if _set_terminal_mode(self):
             self.move_cursor()
         self.shell.send(s)
@@ -857,7 +813,6 @@ class ShellTab(OutputView):
             settings.set('gidterm_init_file', init_file)
         self.shell = Shell()
         self.shell.fork(os.path.expanduser(self.pwd), init_file)
-        self.output = self
         _set_terminal_mode(self)
         self.move_cursor()
         if wait is not None:
@@ -869,7 +824,7 @@ class ShellTab(OutputView):
         if self.in_lines is None:
             # currently displaying output
             return False
-        return self.output.cursor == self.output.home
+        return self.cursor == self.home
 
     def at_cursor(self):
         cursor = self.cursor
@@ -898,23 +853,23 @@ class ShellTab(OutputView):
             if self.prompt_type is None:
                 if plain:
                     if part:
-                        self.output.write(part)
+                        self.write(part)
                 else:
                     if part[0] == '\x1b':
                         command = part[-1]
                         if command == 'p':
                             self.handle_prompt(part, now)
                         else:
-                            self.output.handle_escape(part)
+                            self.handle_escape(part)
                     else:
-                        self.output.handle_control(part)
+                        self.handle_control(part)
             else:
                 if not plain and part == '\x1b[~':
                     self.handle_prompt_end(part, now)
                 else:
                     self.prompt_text += part
 
-        self.output.move_cursor()
+        self.move_cursor()
 
     def handle_prompt(self, part, now):
         arg = part[2:-1]
@@ -924,17 +879,17 @@ class ShellTab(OutputView):
             if prompt_type == '0':
                 # command input ends, output starts
                 # trim trailing spaces from input command
-                assert self.output.cursor == self.output.size()
-                end = self.output.size() - 1
-                assert self.output.substr(end) == '\n'
+                assert self.cursor == self.size()
+                end = self.size() - 1
+                assert self.substr(end) == '\n'
                 in_end_pos = end
-                while self.output.substr(in_end_pos - 1) == ' ':
+                while self.substr(in_end_pos - 1) == ' ':
                     in_end_pos -= 1
-                self.output.delete(in_end_pos, end)
+                self.delete(in_end_pos, end)
                 # update history
-                assert self.output.substr(in_end_pos) == '\n'
+                assert self.substr(in_end_pos) == '\n'
                 self.in_lines.append(
-                    (self.output.home, in_end_pos + 1)
+                    (self.home, in_end_pos + 1)
                 )
                 settings = self.settings()
                 history = settings.get('gidterm_command_history')
@@ -942,7 +897,7 @@ class ShellTab(OutputView):
                 settings.set('gidterm_command_history', history)
                 command = '\n'.join(
                     [
-                        self.output.substr(sublime.Region(b, e))
+                        self.substr(sublime.Region(b, e))
                         for b, e in self.in_lines
                     ]
                 )
@@ -950,43 +905,11 @@ class ShellTab(OutputView):
                 if '/' in words[0]:
                     words[0] = words[0].rsplit('/', 1)[-1]
                 label = ' '.join(shlex.quote(word) for word in words)
+                self.label = label
                 self.in_lines = None
-                self.output.cursor = self.size()
-                self.output.home = self.cursor
+                self.cursor = self.size()
+                self.home = self.cursor
                 self.out_start_time = now
-                if self.new_tab:
-                    window = self.window()
-                    winvar = window.extract_variables()
-                    package = _get_package_location(winvar)
-                    view = window.new_file()
-                    # do not change focus to new window
-                    window.focus_view(self)
-                    view.set_line_endings('Unix')
-                    view.set_read_only(True)
-                    view.set_scratch(True)
-                    view.set_syntax_file(
-                        os.path.join(package, 'gidterm.sublime-syntax')
-                    )
-                    settings = view.settings()
-                    settings.set(
-                        'color_scheme',
-                        os.path.join(package, 'gidterm.sublime-color-scheme')
-                    )
-                    # prevent ST doing work that doesn't help here
-                    settings.set('mini_diff', False)
-                    settings.set('spell_check', False)
-                    # state
-                    settings.set('is_gidterm', True)
-                    settings.set('is_gidterm_output', True)
-                    settings.set('gidterm_pwd', [(0, self.pwd)])
-                    _set_terminal_mode(view)
-                    self.output.set_scope('sgr.blue-on-default')
-                    self.output.write('(Output in separate tab)')
-                    self.output.set_scope(None)
-                    self.output = OutputTab(view.id(), self.shell, label)
-                    self.new_tab = False
-                else:
-                    self.label = label
             elif prompt_type == '2':
                 # command input continues
                 assert self.cursor == self.size()
@@ -1008,9 +931,9 @@ class ShellTab(OutputView):
         if self.prompt_type == '1':
             # output ends, command input starts
             status, pwd = self.prompt_text.split('@', 1)
-            output_end = self.output.size()
-            col = self.output.rowcol(output_end)[1]
-            if self.output.cursor == output_end:
+            output_end = self.size()
+            col = self.rowcol(output_end)[1]
+            if self.cursor == output_end:
                 if col == 0:
                     # cursor at end, with final newline
                     ret_scope = 'sgr.green-on-default'
@@ -1024,29 +947,20 @@ class ShellTab(OutputView):
                 elapsed = timedelta_seconds(
                     (now - self.out_start_time).total_seconds()
                 )
-            if self.output != self:
-                self.output.display_status(status, ret_scope, elapsed)
-            # Switch to default output
-            self.output = self
             if pwd != self.pwd:
                 settings = self.settings()
                 history = settings.get('gidterm_pwd')
                 history.append((output_end, pwd))
                 settings.set('gidterm_pwd', history)
                 self.pwd = pwd
-            if self.out_start_time is None:
-                # enter pressed with no command
-                self.label = ''
-                title = ''
-            else:
+            if self.out_start_time is not None:
                 # finished displaying output of command
                 self.display_status(status, ret_scope, elapsed)
                 # Reset the output timestamp to None so that
                 # pressing enter for a blank line does not show
                 # an updated time since run
                 self.out_start_time = None
-                title = status
-            self.set_title(title)
+                self.set_title(status)
             self.set_scope(None)
         else:
             assert self.prompt_type == '5', self.prompt_type
@@ -1074,7 +988,7 @@ class ShellTab(OutputView):
             elapsed = (now - self.out_start_time).total_seconds()
             if elapsed > 0.2:
                 # don't show time immediately, to avoid flashing
-                self.output.set_title(timedelta_seconds(elapsed))
+                self.set_title(timedelta_seconds(elapsed))
         return now
 
     def once(self):
@@ -1275,7 +1189,7 @@ _terminal_capability_map = {
 
 class GidtermSendCapCommand(sublime_plugin.TextCommand):
 
-    def run(self, edit, cap, new_tab=False):
+    def run(self, edit, cap):
         view = get_gidterm_view(self.view)
         seq = _terminal_capability_map.get(cap)
         if seq is None:
@@ -1285,7 +1199,7 @@ class GidtermSendCapCommand(sublime_plugin.TextCommand):
                 )
             )
         else:
-            if view.send(seq, new_tab):
+            if view.send(seq):
                 if _set_terminal_mode(view):
                     view.move_cursor()
 

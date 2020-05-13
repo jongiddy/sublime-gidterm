@@ -77,7 +77,7 @@
 {"keys": ["shift+tab"], "command": "gidterm_send_cap", "args": {"cap": "kcbt"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["backspace"], "command": "gidterm_send_cap", "args": {"cap": "kbs"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["enter"], "command": "gidterm_send_cap", "args": {"cap": "cr"}, "context": [{"key": "setting.is_gidterm"}]},
-{"keys": ["ctrl+enter"], "command": "gidterm_send_cap", "args": {"cap": "cr", "new_tab": true}, "context": [{"key": "setting.is_gidterm"}]},
+{"keys": ["ctrl+enter"], "command": "gidterm_send_cap", "args": {"cap": "cr"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["shift+enter"], "command": "gidterm_send_cap", "args": {"cap": "cr"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["insert"], "command": "gidterm_send_cap", "args": {"cap": "kich1"}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["delete"], "command": "gidterm_send_cap", "args": {"cap": "kdch1"}, "context": [{"key": "setting.is_gidterm"}]},
