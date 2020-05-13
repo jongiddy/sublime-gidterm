@@ -769,6 +769,7 @@ class ShellTab(OutputView):
         self.shell = None
         self.disconnected = False
         self.loop_active = False
+        self.buffered = ''
 
         _set_browse_mode(self)
 
@@ -797,18 +798,22 @@ class ShellTab(OutputView):
         _set_browse_mode(self)
 
     def send(self, s):
+        if _set_terminal_mode(self):
+            self.move_cursor()
         if self.shell is None:
             self.shell = Shell()
             self.start(50)
-        if _set_terminal_mode(self):
-            self.move_cursor()
-        self.shell.send(s)
+            self.buffered = s
+        elif self.buffered:
+            self.buffered += s
+        else:
+            self.shell.send(s)
 
     def start(self, wait):
         settings = self.settings()
         init_file = settings.get('gidterm_init_file')
         if not os.path.exists(init_file):
-            init_script = settings.get('gidterm_init')
+            init_script = settings.get('gidterm_init', _initial_profile)
             init_file = create_init_file(init_script)
             settings.set('gidterm_init_file', init_file)
         self.shell = Shell()
@@ -930,6 +935,9 @@ class ShellTab(OutputView):
         # end prompt
         if self.prompt_type == '1':
             # output ends, command input starts
+            if self.buffered:
+                self.shell.send(self.buffered)
+                self.buffered = ''
             status, pwd = self.prompt_text.split('@', 1)
             output_end = self.size()
             col = self.rowcol(output_end)[1]
