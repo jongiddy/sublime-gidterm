@@ -179,7 +179,7 @@ def timedelta_seconds(seconds):
 
 
 TITLE_LENGTH = 32
-PROMPT = '>'
+PROMPT = '$'
 ELLIPSIS = '\u2025'
 LONG_ELLIPSIS = '\u2026'
 
@@ -810,7 +810,7 @@ class ShellTab(OutputView):
         pwd = self.pwd
         parts = pwd.split('/')
         if len(parts) >= 3:
-            short = '{}/{}/{}'.format(parts[0], ELLIPSIS, parts[-1])
+            short = '**/{}'.format(parts[-1])
         else:
             short = pwd
         path_len = min(len(pwd), len(short))
@@ -828,22 +828,43 @@ class ShellTab(OutputView):
             left = pwd
         elif len(short) <= size:
             left = short
-            start = parts[0]
+            start = parts[:2]
             end = parts[-1]
             parts = parts[2:-1]
             while parts:
-                end = parts.pop() + '/' + end
-                c = '{}/{}/{}'.format(start, ELLIPSIS, end)
-                if len(c) > size:
-                    break
-                left = c
-        else:
-            start = parts[0]
+                # keep adding components to the end until we reach the capacity
+                c = parts.pop() + '/' + end
+                if len(c) <= size - 3:
+                    left = '**/{}'.format(c)
+                    end = c
+                    continue
+                # once we cannot add whole components to the end, see if we can
+                # add whole components to the start.
+                if parts:
+                    start.append('**')
+                else:
+                    start.append('*')
+                start.append(end)
+                c = '/'.join(start)
+                if len(c) <= size:
+                    left = c
+                else:
+                    c = start[0] + '/**/' + end
+                    if len(c) <= size:
+                        left = c
+                break
+            else:
+                # We added everything but the first two path components.
+                # We know that the whole path doesn't fit, so check if
+                # we can add the first component.
+                c = start[0] + '/*/' + end
+                if len(c) <= size:
+                    left = c
+        elif size > 4:
             end = parts[-1]
-            left = '{}/{}'.format(start, ELLIPSIS)
-            size -= len(left)
-            if size > 0:
-                left += end[-size:]
+            left = '**/*{}'.format(end[4 - size:])
+        else:
+            left = ''
         return '{}{}{}'.format(left, PROMPT, right)
 
     def disconnect(self):
@@ -1023,6 +1044,9 @@ class ShellTab(OutputView):
                 # an updated time since run
                 self.out_start_time = None
                 self.set_title(status)
+            else:
+                self.set_title()
+
             self.set_scope(None)
         else:
             assert self.prompt_type == '5', self.prompt_type
