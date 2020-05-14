@@ -176,7 +176,9 @@ def timedelta_seconds(seconds):
 
 
 TITLE_LENGTH = 32
+PROMPT = '>'
 ELLIPSIS = '\u2025'
+LONG_ELLIPSIS = '\u2026'
 
 
 class OutputView(sublime.View):
@@ -707,7 +709,6 @@ class OutputView(sublime.View):
             self.cursor = pos
             return
         print('gidterm: [WARN] unknown escape: {!r}'.format(part))
-        self.write(part)
 
     def display_status(self, status, ret_scope, elapsed):
         output_end = self.size()
@@ -754,7 +755,7 @@ class ShellTab(OutputView):
         _viewmap[view_id] = self
         history = self.settings().get('gidterm_pwd')
         self.pwd = history[-1][1]
-        self.label = ''
+        self.command = []
         self.set_title()
 
         # `cursor` is the location of the input cursor. It is often the end of
@@ -774,22 +775,71 @@ class ShellTab(OutputView):
         _set_browse_mode(self)
 
     def get_label(self, size):
-        label = self.label
-        if len(label) <= size - 2:
-            label = '$ ' + label
-            alt1 = self.pwd + label
-            if len(alt1) <= size:
-                label = alt1
+        if size < 3:
+            if size == 0:
+                return ''
+            if size == 1:
+                return PROMPT
+            if len(self.pwd) <= size - 1:
+                return self.pwd + PROMPT
+            return ELLIPSIS + PROMPT
+
+        size -= 1 # for PROMPT
+        if self.command:
+            arg0 = self.command[0]
+            if len(self.command) == 1:
+                if len(arg0) <= size - 1:
+                    # we can fit '> arg0'
+                    right = ' ' + arg0
+                else:
+                    return '{} {}{}'.format(PROMPT, arg0[:size - 2], ELLIPSIS)
             else:
-                alt2 = os.path.basename(self.pwd) + label
-                if len(alt2) <= size:
-                    label = alt2
+                if len(arg0) <= size - 3:
+                    # we can fit '> arg0 ..'
+                    right = ' {} {}'.format(arg0[:size - 3], ELLIPSIS)
+                else:
+                    return '{} {}{}'.format(PROMPT, arg0[:size - 3], LONG_ELLIPSIS)
         else:
-            if size < 5:
-                label = '$'
+            right = ''
+
+        pwd = self.pwd
+        parts = pwd.split('/')
+        if len(parts) >= 3:
+            short = '{}/{}/{}'.format(parts[0], ELLIPSIS, parts[-1])
+        else:
+            short = pwd
+        path_len = min(len(pwd), len(short))
+        right_avail = size - path_len
+        if len(self.command) > 1 and right_avail > len(right):
+            # we have space to expand the args
+            full = ' '.join(self.command)
+            if len(full) < right_avail:
+                right = ' ' + full
             else:
-                label = '$ ' + label[:size - 4] + ELLIPSIS
-        return label
+                right = ' {}{}'.format(full[:right_avail - 2], ELLIPSIS)
+
+        size -= len(right)
+        if len(pwd) <= size:
+            left = pwd
+        elif len(short) <= size:
+            left = short
+            start = parts[0]
+            end = parts[-1]
+            parts = parts[2:-1]
+            while parts:
+                end = parts.pop() + '/' + end
+                c = '{}/{}/{}'.format(start, ELLIPSIS, end)
+                if len(c) > size:
+                    break
+                left = c
+        else:
+            start = parts[0]
+            end = parts[-1]
+            left = '{}/{}'.format(start, ELLIPSIS)
+            size -= len(left)
+            if size > 0:
+                left += end[-size:]
+        return '{}{}{}'.format(left, PROMPT, right)
 
     def disconnect(self):
         if self.shell is not None:
@@ -909,8 +959,7 @@ class ShellTab(OutputView):
                 words = shlex.split(command.strip())
                 if '/' in words[0]:
                     words[0] = words[0].rsplit('/', 1)[-1]
-                label = ' '.join(shlex.quote(word) for word in words)
-                self.label = label
+                self.command = words
                 self.in_lines = None
                 self.cursor = self.size()
                 self.home = self.cursor
@@ -1375,7 +1424,7 @@ class GidtermSelectCommand(sublime_plugin.TextCommand):
 def is_likely_path_char(c):
     if ord(c) <= 32:  # Control character or space
         return False
-    if c in '<>&|\'",;:[](){}*?':  # more commonly near paths than in paths
+    if c in '<>&|\'",;:[](){}*?`':  # more commonly near paths than in paths
         return False
     return True
 
