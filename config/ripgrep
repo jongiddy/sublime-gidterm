@@ -1,0 +1,3 @@
+# Make ripgrep always write filenames in-line. This works better with the
+# GidTerm context menu.
+--no-heading

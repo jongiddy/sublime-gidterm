@@ -69,6 +69,9 @@ export PAGER=cat
 
 # Don't add control commands to the history
 export HISTIGNORE=${HISTIGNORE:+${HISTIGNORE}:}'*# [@gidterm@]'
+
+# Specific configuration to make applications work well with GidTerm
+export RIPGREP_CONFIG_PATH=${GIDTERM_CONFIG}/ripgrep
 '''
 
 _exit_status_info = {}
@@ -784,7 +787,7 @@ class ShellTab(OutputView):
                 return self.pwd + PROMPT
             return ELLIPSIS + PROMPT
 
-        size -= 1 # for PROMPT
+        size -= 1  # for PROMPT
         if self.command:
             arg0 = self.command[0]
             if len(self.command) == 1:
@@ -798,7 +801,9 @@ class ShellTab(OutputView):
                     # we can fit '> arg0 ..'
                     right = ' {} {}'.format(arg0[:size - 3], ELLIPSIS)
                 else:
-                    return '{} {}{}'.format(PROMPT, arg0[:size - 3], LONG_ELLIPSIS)
+                    return '{} {}{}'.format(
+                        PROMPT, arg0[:size - 3], LONG_ELLIPSIS
+                    )
         else:
             right = ''
 
@@ -863,7 +868,7 @@ class ShellTab(OutputView):
         settings = self.settings()
         init_file = settings.get('gidterm_init_file')
         if not os.path.exists(init_file):
-            init_script = settings.get('gidterm_init', _initial_profile)
+            init_script = settings.get('gidterm_init', get_initial_profile())
             init_file = create_init_file(init_script)
             settings.set('gidterm_init_file', init_file)
         self.shell = Shell()
@@ -1136,6 +1141,12 @@ def _get_package_location(winvar):
     return this_package[len(unwanted) + 1:]
 
 
+def get_initial_profile():
+    this_package = os.path.dirname(__file__)
+    config = os.path.join(this_package, 'config')
+    return 'declare -- GIDTERM_CONFIG="{}"\n'.format(config) + _initial_profile
+
+
 def create_view(window, pwd, init_script):
     winvar = window.extract_variables()
     package = _get_package_location(winvar)
@@ -1180,7 +1191,7 @@ class GidtermCommand(sublime_plugin.TextCommand):
                 pwd = None
             else:
                 pwd = os.path.dirname(filename)
-            init_script = _initial_profile
+            init_script = get_initial_profile()
         window = self.view.window()
         view = create_view(window, pwd, init_script)
         window.focus_view(view)
@@ -1576,7 +1587,11 @@ def get_line_col(view, pos):
                 col += ch
                 pos += 1
                 ch = view.substr(pos)
-            return (line, col)
+            if ch in ': \t\r\n':
+                return (line, col)
+            else:
+                # avoid PATH:LINE:YEAR-MONTH-DAY
+                return (line, 0)
         return None
     elif ch == '"':
         if view.substr(sublime.Region(pos + 1, pos + 8)) == ', line ':
