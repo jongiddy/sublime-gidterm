@@ -1,6 +1,6 @@
 # Sublime GidTerm
 
-Terminal that runs inside Sublime Text. Beta quality. Linux only.
+Terminal that runs inside Sublime Text. Linux only.
 
 ## Install
 

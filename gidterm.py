@@ -1397,7 +1397,7 @@ class GidtermReplaceCommand(sublime_plugin.TextCommand):
         view = get_gidterm_view(self.view)
         buf = sublime.get_clipboard().strip()
         if view.in_lines is not None:
-            buf = '\b' * (view.size() - view.output.home) + buf
+            buf = '\b' * (view.size() - view.home) + buf
         view.send(buf)
         if _set_terminal_mode(view):
             view.move_cursor()
@@ -1408,7 +1408,7 @@ class GidtermDeleteCommand(sublime_plugin.TextCommand):
     def run(self, edit):
         view = get_gidterm_view(self.view)
         if view.in_lines is not None:
-            buf = '\b' * (view.size() - view.output.home)
+            buf = '\b' * (view.size() - view.home)
         view.send(buf)
         if _set_terminal_mode(view):
             view.move_cursor()

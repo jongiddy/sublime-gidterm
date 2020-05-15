@@ -113,31 +113,46 @@ class TestGidTermCommand(TestCase, GidTermTestHelper):
     def test_gidterm_command(self):
         window = sublime.active_window()
         view0 = window.new_file()
-        view0.run_command('gidterm')
-        view1 = window.active_view()
-        self.assertNotEqual(view0, view1)
-        gview1 = gidterm._viewmap[view1.id()]
-        self.wait_for_prompt(gview1)
-        self.send_command(gview1, 'cd /tmp')
-        self.wait_for_prompt(gview1)
-        self.send_command(gview1, 'export TEST_VAR=apple')
-        self.wait_for_prompt(gview1)
+        try:
+            view0.run_command('gidterm')
+            view1 = window.active_view()
+            self.assertNotEqual(view0, view1)
+        finally:
+            view0.set_scratch(True)
+            view0.window().focus_view(view0)
+            view0.window().run_command("close_file")
+        try:
+            gview1 = gidterm._viewmap[view1.id()]
+            self.wait_for_prompt(gview1)
+            self.send_command(gview1, 'cd /tmp')
+            self.wait_for_prompt(gview1)
+            self.send_command(gview1, 'export TEST_VAR=apple')
+            self.wait_for_prompt(gview1)
 
-        # Start another GidTerm from this one, and check
-        # that it has the same pwd and environment
-        gview1.run_command('gidterm')
-        view2 = window.active_view()
-        self.assertNotEqual(view1, view2)
-        gview2 = gidterm._viewmap[view2.id()]
-        self.wait_for_prompt(gview2)
-        self.assertEqual(gview2.pwd, '/tmp')
-        command = 'echo $TEST_VAR'
-        c1 = self.single_cursor(view2)
-        self.send_command(gview2, command)
-        self.wait_for_prompt(gview2)
-        c2 = self.single_cursor(view2)
-        output = view2.substr(sublime.Region(c1, c2))
-        self.assertIn('\napple\n', output, output)
+            # Start another GidTerm from this one, and check
+            # that it has the same pwd and environment
+            gview1.run_command('gidterm')
+            view2 = window.active_view()
+            self.assertNotEqual(view1, view2)
+        finally:
+            view1.set_scratch(True)
+            view1.window().focus_view(view1)
+            view1.window().run_command("close_file")
+        try:
+            gview2 = gidterm._viewmap[view2.id()]
+            self.wait_for_prompt(gview2)
+            self.assertEqual(gview2.pwd, '/tmp')
+            command = 'echo $TEST_VAR'
+            c1 = self.single_cursor(view2)
+            self.send_command(gview2, command)
+            self.wait_for_prompt(gview2)
+            c2 = self.single_cursor(view2)
+            output = view2.substr(sublime.Region(c1, c2))
+            self.assertIn('\napple\n', output, output)
+        finally:
+            view2.set_scratch(True)
+            view2.window().focus_view(view2)
+            view2.window().run_command("close_file")
 
 
 class TestGidTermOnce(TestCase, GidTermTestHelper):
