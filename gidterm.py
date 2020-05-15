@@ -1034,13 +1034,19 @@ class ShellTab(OutputView):
                 history.append((output_end, pwd))
                 settings.set('gidterm_pwd', history)
                 self.pwd = pwd
-            if self.out_start_time is not None:
+                # For `cd` avoid duplicating the name in the title to show more
+                # of the path. There's an implicit `status == '0'` here, since
+                # the directory doesn't change if the command fails.
+                if self.command and self.command[0] == 'cd':
+                    self.command = []
+            if self.out_start_time is None:
+                # generally, pressing Enter at an empty command line
+                self.command = []
+            else:
                 # finished displaying output of command
                 self.display_status(status, ret_scope, elapsed)
-                # Reset the output timestamp to None so that
-                # pressing enter for a blank line does not show
-                # an updated time since run
                 self.out_start_time = None
+            if self.command:
                 self.set_title(status)
             else:
                 self.set_title()
