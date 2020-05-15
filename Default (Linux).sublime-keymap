@@ -6,7 +6,7 @@
 {"keys": ["pageup"], "command": "gidterm_escape", "args": {"key": "pageup"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["pagedown"], "command": "gidterm_escape", "args": {"key": "pagedown"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["ctrl+home"], "command": "gidterm_escape", "args": {"key": "ctrl+home"}, "context": [{"key": "setting.gidterm_follow"}]},
-{"keys": ["ctrl+end"], "command": "gidterm_escape", "args": {"key": "ctrl+end"}, "context": [{"key": "setting.gidterm_follow"}]},
+{"keys": ["ctrl+end"], "command": "gidterm_follow", "args": {"key": "ctrl+end"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["shift+home"], "command": "gidterm_escape", "args": {"key": "shift+home"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["shift+end"], "command": "gidterm_escape", "args": {"key": "shift+end"}, "context": [{"key": "setting.gidterm_follow"}]},
 {"keys": ["shift+pageup"], "command": "gidterm_escape", "args": {"key": "shift+pageup"}, "context": [{"key": "setting.gidterm_follow"}]},

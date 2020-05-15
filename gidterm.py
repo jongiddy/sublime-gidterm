@@ -1295,8 +1295,11 @@ class GidtermSendCapCommand(sublime_plugin.TextCommand):
                     view.move_cursor()
             else:
                 _set_browse_mode(view)
-                # Avoid scrolling by unsetting the selection
+                # Unsetting the selection prevents scrolling, but
+                # disables navigation (PgUp, etc). Set to just before
+                # end to prevent scrolling.
                 view.sel().clear()
+                view.sel().add(view.size() - 1)
                 view.send(seq)
 
 
@@ -1360,6 +1363,19 @@ class GidtermEscapeCommand(sublime_plugin.TextCommand):
             print('gidterm: [WARN] unexpected escape key: {}'.format(key))
         else:
             _set_browse_mode(view)
+            action(view)
+
+
+class GidtermFollowCommand(sublime_plugin.TextCommand):
+
+    def run(self, edit, key):
+        view = get_gidterm_view(self.view)
+        action = _follow_escape.get(key)
+        if action is None:
+            print('gidterm: [WARN] unexpected escape key: {}'.format(key))
+        else:
+            if _set_terminal_mode(view):
+                view.move_cursor()
             action(view)
 
 

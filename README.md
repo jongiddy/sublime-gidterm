@@ -33,14 +33,16 @@ The shell tab has two modes:
 
 In terminal mode, change to browse mode using one of the following:
 
-- Ctrl-click;
 - Select any text;
+- `Ctrl`-click;
 - `Ctrl-Enter` to run a command but stay at start rather than following output;
-- `Home`, `End`, `PageUp`, `PageDown` (including with `Shift` and `Ctrl` modifiers) to perform the usual Sublime Text navigation;
-- `Shift-Ctrl-PageUp` and `Shift-Ctrl-PageDown` to select the previous or next command respectively. This only works when at the input prompt.
+- `Home`, `End`, `PageUp`, `PageDown` (including with `Shift` and `Ctrl` modifiers, except `Ctrl-End`) to perform the usual Sublime Text navigation;
+- `Shift-Ctrl-PageUp` and `Shift-Ctrl-PageDown` to select the previous or next command respectively. This only works when at the input prompt. `Shift-Ctrl-PageDown` when at or after the last command will return to terminal mode.
 
 In browse mode, change to terminal mode using one of the following:
 
+- `Ctrl-End`;
+- `Shift-Ctrl-PageDown` when at or after the last command;
 - Type any printing character, including `Enter`, `Tab`, `Backspace`, and `Delete`;
 - `Ctrl-V` to insert the clipboard into the command prompt;
 - `Ctrl-Insert` to insert the clipboard into the command prompt with surrounding whitespace removed;
