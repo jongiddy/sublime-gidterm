@@ -34,7 +34,8 @@ The shell tab has two modes:
 In terminal mode, change to browse mode using one of the following:
 
 - Ctrl-click;
-- Select any text; 
+- Select any text;
+- `Ctrl-Enter` to run a command but stay at start rather than following output;
 - `Home`, `End`, `PageUp`, `PageDown` (including with `Shift` and `Ctrl` modifiers) to perform the usual Sublime Text navigation;
 - `Shift-Ctrl-PageUp` and `Shift-Ctrl-PageDown` to select the previous or next command respectively. This only works when at the input prompt.
 

@@ -874,8 +874,6 @@ class ShellTab(OutputView):
         _set_browse_mode(self)
 
     def send(self, s):
-        if _set_terminal_mode(self):
-            self.move_cursor()
         if self.shell is None:
             self.shell = Shell()
             self.start(50)
@@ -1241,9 +1239,9 @@ class GidtermSendCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, characters):
         view = get_gidterm_view(self.view)
-        if view.send(characters):
-            if _set_terminal_mode(view):
-                view.move_cursor()
+        view.send(characters)
+        if _set_terminal_mode(view):
+            view.move_cursor()
 
 
 _terminal_capability_map = {
@@ -1281,19 +1279,25 @@ _terminal_capability_map = {
 
 class GidtermSendCapCommand(sublime_plugin.TextCommand):
 
-    def run(self, edit, cap):
+    def run(self, edit, cap, terminal_mode=True):
         view = get_gidterm_view(self.view)
         seq = _terminal_capability_map.get(cap)
-        if seq is None:
+        if not seq:
             print(
                 'gidterm: [WARN] unexpected terminal capability: {}'.format(
                     cap
                 )
             )
         else:
-            if view.send(seq):
+            if terminal_mode:
+                view.send(seq)
                 if _set_terminal_mode(view):
                     view.move_cursor()
+            else:
+                _set_browse_mode(view)
+                # Avoid scrolling by unsetting the selection
+                view.sel().clear()
+                view.send(seq)
 
 
 _follow_escape = {
@@ -1366,9 +1370,9 @@ class GidtermInsertCommand(sublime_plugin.TextCommand):
         buf = sublime.get_clipboard()
         if strip:
             buf = buf.strip()
-        if view.send(buf):
-            if _set_terminal_mode(view):
-                view.move_cursor()
+        view.send(buf)
+        if _set_terminal_mode(view):
+            view.move_cursor()
 
 
 class GidtermReplaceCommand(sublime_plugin.TextCommand):
@@ -1378,9 +1382,9 @@ class GidtermReplaceCommand(sublime_plugin.TextCommand):
         buf = sublime.get_clipboard().strip()
         if view.in_lines is not None:
             buf = '\b' * (view.size() - view.output.home) + buf
-        if view.send(buf):
-            if _set_terminal_mode(view):
-                view.move_cursor()
+        view.send(buf)
+        if _set_terminal_mode(view):
+            view.move_cursor()
 
 
 class GidtermDeleteCommand(sublime_plugin.TextCommand):
@@ -1389,9 +1393,9 @@ class GidtermDeleteCommand(sublime_plugin.TextCommand):
         view = get_gidterm_view(self.view)
         if view.in_lines is not None:
             buf = '\b' * (view.size() - view.output.home)
-        if view.send(buf):
-            if _set_terminal_mode(view):
-                view.move_cursor()
+        view.send(buf)
+        if _set_terminal_mode(view):
+            view.move_cursor()
 
 
 class GidtermSelectCommand(sublime_plugin.TextCommand):
@@ -1657,6 +1661,8 @@ class gidterm_context(sublime_plugin.TextCommand):
             if gview.at_prompt():
                 cr = _terminal_capability_map['cr']
                 gview.send('ls -a{}'.format(cr))
+                if _set_terminal_mode(gview):
+                    gview.move_cursor()
         elif action == CONTEXT_ACTION_DIR_CHANGE:
             gview = get_gidterm_view(self.view, start=True)
             if not gview.at_prompt():
@@ -1668,6 +1674,8 @@ class gidterm_context(sublime_plugin.TextCommand):
                     path = relative
                 cr = _terminal_capability_map['cr']
                 gview.send('cd {}{}'.format(shlex.quote(path), cr))
+                if _set_terminal_mode(gview):
+                    gview.move_cursor()
         else:
             window = self.view.window()
             if action == CONTEXT_ACTION_FILE_GOTO:
