@@ -712,7 +712,6 @@ class OutputView(sublime.View):
             if col != 0:
                 pos = self.write(pos, '\n')
             self.cursor = pos
-            return
         print('gidterm: [WARN] unknown escape: {!r}'.format(part))
 
     def display_status(self, status, ret_scope, elapsed):
