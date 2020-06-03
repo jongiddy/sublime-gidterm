@@ -421,6 +421,7 @@ class OutputView(sublime.View):
                     if selector == '2':
                         # r, g, b
                         i += 3
+                        continue
                     elif selector == '5':
                         # 8-bit
                         idx = int(nums[i + 1])
@@ -429,29 +430,29 @@ class OutputView(sublime.View):
                         elif idx < 16:
                             nums[i + 1] = str(90 + idx - 8)
                         elif idx >= 254:
-                            nums[i + 1] = '15'  # mostly white
+                            nums[i + 1] = '97'  # mostly white
                         elif idx >= 247:
-                            nums[i + 1] = '7'   # light grey
+                            nums[i + 1] = '37'   # light grey
                         elif idx >= 240:
-                            nums[i + 1] = '8'   # dark grey
+                            nums[i + 1] = '90'   # dark grey
                         elif idx >= 232:
-                            nums[i + 1] = '0'   # mostly black
+                            nums[i + 1] = '30'   # mostly black
                         else:
                             assert 16 <= idx <= 231, idx
-                            rg, b = divmod(idx, 6)
-                            r, g = divmod(idx, 6)
+                            rg, b = divmod(idx - 16, 6)
+                            r, g = divmod(rg, 6)
                             r //= 3
                             g //= 3
                             b //= 3
                             x = {
-                                (0, 0, 0): '8',
-                                (0, 0, 1): '12',
-                                (0, 1, 0): '10',
-                                (0, 1, 1): '14',
-                                (1, 0, 0): '9',
-                                (1, 0, 1): '13',
-                                (1, 1, 0): '11',
-                                (1, 1, 1): '7',
+                                (0, 0, 0): '90',
+                                (0, 0, 1): '94',
+                                (0, 1, 0): '92',
+                                (0, 1, 1): '96',
+                                (1, 0, 0): '91',
+                                (1, 0, 1): '95',
+                                (1, 1, 0): '93',
+                                (1, 1, 1): '37',
                             }
                             nums[i + 1] = x[(r, g, b)]
                 elif num == '39':
@@ -486,28 +487,29 @@ class OutputView(sublime.View):
                         elif idx < 16:
                             nums[i + 1] = str(100 + idx - 8)
                         elif idx >= 254:
-                            nums[i + 1] = '15'  # mostly white
+                            nums[i + 1] = '107'  # mostly white
                         elif idx >= 247:
-                            nums[i + 1] = '7'   # light grey
+                            nums[i + 1] = '47'   # light grey
                         elif idx >= 240:
-                            nums[i + 1] = '8'   # dark grey
+                            nums[i + 1] = '100'   # dark grey
                         elif idx >= 232:
-                            nums[i + 1] = '0'   # mostly black
+                            nums[i + 1] = '40'   # mostly black
                         else:
-                            rg, b = divmod(idx, 6)
-                            r, g = divmod(idx, 6)
+                            assert 16 <= idx <= 231, idx
+                            rg, b = divmod(idx - 16, 6)
+                            r, g = divmod(rg, 6)
                             r //= 3
                             g //= 3
                             b //= 3
                             x = {
-                                (0, 0, 0): '8',
-                                (0, 0, 1): '12',
-                                (0, 1, 0): '10',
-                                (0, 1, 1): '14',
-                                (1, 0, 0): '9',
-                                (1, 0, 1): '13',
-                                (1, 1, 0): '11',
-                                (1, 1, 1): '7',
+                                (0, 0, 0): '100',
+                                (0, 0, 1): '104',
+                                (0, 1, 0): '102',
+                                (0, 1, 1): '106',
+                                (1, 0, 0): '101',
+                                (1, 0, 1): '105',
+                                (1, 1, 0): '103',
+                                (1, 1, 1): '47',
                             }
                             nums[i + 1] = x[(r, g, b)]
                 elif num == '49':
