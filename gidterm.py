@@ -12,8 +12,7 @@ import tempfile
 import sublime  # type: ignore
 import sublime_plugin  # type: ignore
 
-# Map from Sublime view to GidTerm Tab
-_viewmap = {}
+_viewmap = {}  # type: dict[sublime.View, ShellTab]
 
 
 _initial_profile = r'''
@@ -72,7 +71,7 @@ export HISTIGNORE=${HISTIGNORE:+${HISTIGNORE}:}'*# [@gidterm@]'
 export RIPGREP_CONFIG_PATH=${GIDTERM_CONFIG}/ripgrep
 '''
 
-_exit_status_info = {}
+_exit_status_info = {}  # type: dict[str, str]
 
 for name in dir(signal):
     if name.startswith('SIG') and not name.startswith('SIG_'):
@@ -198,7 +197,7 @@ class OutputView(sublime.View):
     def __init__(self, view_id):
         # type: (int) -> None
         super().__init__(view_id)
-        self.cursor = self.home = self.size()
+        self.cursor = self.home = self.size()  # type: int
         self.scope = None  # type: str|None
 
     def set_title(self, extra=''):
@@ -780,24 +779,24 @@ class ShellTab(OutputView):
         # type: (int) -> None
         super().__init__(view_id)
         _viewmap[view_id] = self
-        history = self.settings().get('gidterm_pwd')
-        self.pwd = history[-1][1]
+        history = self.settings().get('gidterm_pwd')  # type: list[tuple[int, str]]  # noqa
+        self.pwd = history[-1][1]  # type: str
         self.command = []  # type: list[str]
         self.set_title()
 
         # `cursor` is the location of the input cursor. It is often the end of
         # the doc but may be earlier if the LEFT key is used, or during
         # command history rewriting.
-        self.cursor = self.size()
-        self.in_lines = None  # type: list[tuple[str, int]]|None
+        self.cursor = self.size()  # type: int
+        self.in_lines = None  # type: list[tuple[int, int]]|None
         self.out_start_time = None  # type: datetime|None
         self.prompt_type = None  # type: str|None
-        self.scope = None
-        self.saved = ''
+        self.scope = None  # type: str|None
+        self.saved = ''  # type: str
         self.shell = None  # type: Shell|None
-        self.disconnected = False
-        self.loop_active = False
-        self.buffered = ''
+        self.disconnected = False  # type: bool
+        self.loop_active = False  # type: bool
+        self.buffered = ''  # type: str
 
         _set_browse_mode(self)
 
