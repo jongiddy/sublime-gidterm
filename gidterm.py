@@ -9,8 +9,8 @@ import shlex
 import signal
 import tempfile
 
-import sublime
-import sublime_plugin
+import sublime  # type: ignore
+import sublime_plugin  # type: ignore
 
 # Map from Sublime view to GidTerm Tab
 _viewmap = {}
@@ -86,6 +86,7 @@ for name in dir(signal):
 
 
 def gidterm_decode_error(e):
+    # type: (...) -> tuple[str, int]
     # If text is not Unicode, it is most likely Latin-1. Windows-1252 is a
     # superset of Latin-1 and may be present in downloaded files.
     # TODO: Use the LANG setting to select appropriate fallback encoding
@@ -107,15 +108,18 @@ codecs.register_error('gidterm', gidterm_decode_error)
 class Shell:
 
     def __init__(self):
-        self.pid = None
-        self.fd = None
+        # type: () -> None
+        self.pid = None  # type: int|None
+        self.fd = None  # type: int|None
         utf8_decoder_factory = codecs.getincrementaldecoder('utf8')
         self.decoder = utf8_decoder_factory(errors='gidterm')
 
     def __del__(self):
+        # type: () -> None
         self.close()
 
     def close(self):
+        # type: () -> None
         if self.fd is not None:
             os.close(self.fd)
             self.fd = None
@@ -125,10 +129,12 @@ class Shell:
                 self.pid = None
 
     def fork(self, workdir, init_file):
+        # type: (str, str) -> None
         args = [
             'bash', '--rcfile', init_file
         ]
-        env = os.environ.update({
+        env = os.environ.copy()
+        env.update({
             # If COLUMNS is the default of 80, the shell will break long
             # prompts over two lines, making them harder to search for. It also
             # allows the shell to use UP control characters to edit lines
@@ -148,6 +154,7 @@ class Shell:
             os.execvpe('bash', args, env)
 
     def send(self, s):
+        # type: (str) -> bool
         if self.fd is None:
             return False
         if s:
@@ -155,6 +162,7 @@ class Shell:
         return True
 
     def ready(self):
+        # type: () -> bool
         fd = self.fd
         if fd is None:
             return False
@@ -162,6 +170,8 @@ class Shell:
         return fd in rfds
 
     def receive(self):
+        # type: () -> str
+        assert self.fd is not None
         try:
             buf = os.read(self.fd, 8192)
         except OSError as e:
@@ -172,6 +182,7 @@ class Shell:
 
 
 def timedelta_seconds(seconds):
+    # type: (float) -> timedelta
     s = int(round(seconds))
     return timedelta(seconds=s)
 
@@ -185,12 +196,13 @@ LONG_ELLIPSIS = '\u2026'
 class OutputView(sublime.View):
 
     def __init__(self, view_id):
+        # type: (int) -> None
         super().__init__(view_id)
         self.cursor = self.home = self.size()
-        self.scope = None
+        self.scope = None  # type: str|None
 
     def set_title(self, extra=''):
-        extra = str(extra)
+        # type: (str) -> None
         if extra:
             size = TITLE_LENGTH - len(extra) - 1
             name = '{}\ufe19{}'.format(self.get_label(size), extra)
@@ -199,9 +211,11 @@ class OutputView(sublime.View):
         self.set_name(name)
 
     def set_scope(self, scope):
+        # type: (str|None) -> None
         self.scope = scope
 
     def move_cursor(self):
+        # type: () -> None
         follow = self.settings().get('gidterm_follow')
         if follow:
             sel = self.sel()
@@ -210,6 +224,7 @@ class OutputView(sublime.View):
             self.show(self.cursor)
 
     def insert_text(self, text):
+        # type: (str) -> None
         start = self.cursor
         end = start + len(text)
         if start == self.size():
@@ -248,6 +263,7 @@ class OutputView(sublime.View):
         self.cursor = end
 
     def write(self, text):
+        # type: (str) -> None
         start = self.cursor
         end = start + len(text)
         if start == self.size():
@@ -299,6 +315,7 @@ class OutputView(sublime.View):
         self.cursor = end
 
     def erase(self, begin, end):
+        # type: (int, int) -> None
         classification = self.classify(begin)
         if classification & sublime.CLASS_LINE_END:
             eol = begin
@@ -327,6 +344,7 @@ class OutputView(sublime.View):
                     self.set_read_only(True)
 
     def delete(self, begin, end):
+        # type: (int, int) -> None
         if begin < end:
             self.set_read_only(False)
             self.run_command(
@@ -335,6 +353,7 @@ class OutputView(sublime.View):
             self.set_read_only(True)
 
     def handle_control(self, part):
+        # type: (str) -> None
         if part == '\x07':
             return
         if part[0] == '\x08':
@@ -372,6 +391,7 @@ class OutputView(sublime.View):
         self.write(part)
 
     def handle_escape(self, part):
+        # type: (str) -> None
         if part[1] != '[':
             assert part[1] in '()*+]', part
             # ignore codeset and set-title
@@ -551,7 +571,7 @@ class OutputView(sublime.View):
                         )
                     )
                 i += 1
-            scope = 'sgr.{}-on-{}'.format(fg, bg)
+            scope = 'sgr.{}-on-{}'.format(fg, bg)  # type: str|None
             if scope == 'sgr.default-on-default':
                 scope = None
             self.scope = scope
@@ -707,12 +727,16 @@ class OutputView(sublime.View):
             # ensure we are at the start of a line when we see them.
             pos = self.size()
             col = self.rowcol(pos)[1]
-            if col != 0:
-                pos = self.write(pos, '\n')
-            self.cursor = pos
+            if col == 0:
+                self.cursor = pos
+            else:
+                # at end of last line
+                self.write('\n')
+
         print('gidterm: [WARN] unknown escape: {!r}'.format(part))
 
     def display_status(self, status, ret_scope, elapsed):
+        # type: (str, str, timedelta) -> None
         output_end = self.size()
         col = self.rowcol(output_end)[1]
         self.cursor = output_end
@@ -753,23 +777,24 @@ class ShellTab(OutputView):
     )
 
     def __init__(self, view_id):
+        # type: (int) -> None
         super().__init__(view_id)
         _viewmap[view_id] = self
         history = self.settings().get('gidterm_pwd')
         self.pwd = history[-1][1]
-        self.command = []
+        self.command = []  # type: list[str]
         self.set_title()
 
         # `cursor` is the location of the input cursor. It is often the end of
         # the doc but may be earlier if the LEFT key is used, or during
         # command history rewriting.
         self.cursor = self.size()
-        self.in_lines = None
-        self.out_start_time = None
-        self.prompt_type = None
+        self.in_lines = None  # type: list[tuple[str, int]]|None
+        self.out_start_time = None  # type: datetime|None
+        self.prompt_type = None  # type: str|None
         self.scope = None
         self.saved = ''
-        self.shell = None
+        self.shell = None  # type: Shell|None
         self.disconnected = False
         self.loop_active = False
         self.buffered = ''
@@ -777,6 +802,7 @@ class ShellTab(OutputView):
         _set_browse_mode(self)
 
     def get_label(self, size):
+        # type: (int) -> str
         if size < 3:
             if size == 0:
                 return ''
@@ -867,12 +893,14 @@ class ShellTab(OutputView):
         return '{}{}{}'.format(left, PROMPT, right)
 
     def disconnect(self):
+        # type: () -> None
         if self.shell is not None:
             self.shell.close()
             self.shell = None
         _set_browse_mode(self)
 
     def send(self, s):
+        # type: (str) -> None
         if self.shell is None:
             self.shell = Shell()
             self.start(50)
@@ -883,6 +911,7 @@ class ShellTab(OutputView):
             self.shell.send(s)
 
     def start(self, wait):
+        # type: (int) -> None
         settings = self.settings()
         init_file = settings.get('gidterm_init_file')
         if not os.path.exists(init_file):
@@ -899,12 +928,14 @@ class ShellTab(OutputView):
                 sublime.set_timeout(self.loop, wait)
 
     def at_prompt(self):
+        # type: () -> bool
         if self.in_lines is None:
             # currently displaying output
             return False
         return self.cursor == self.home
 
     def at_cursor(self):
+        # type: () -> bool
         cursor = self.cursor
         for region in self.sel():
             if region.begin() != cursor or region.end() != cursor:
@@ -912,6 +943,7 @@ class ShellTab(OutputView):
         return True
 
     def handle_output(self, s, now):
+        # type:(str, datetime) -> None
         # Add any saved text from previous iteration, split text on control
         # characters that are handled specially, then save any partial control
         # characters at end of text.
@@ -950,6 +982,7 @@ class ShellTab(OutputView):
         self.move_cursor()
 
     def handle_prompt(self, part, now):
+        # type: (str, datetime) -> None
         arg = part[2:-1]
         if arg.endswith('!'):
             # standalone prompt
@@ -966,6 +999,7 @@ class ShellTab(OutputView):
                 self.delete(in_end_pos, end)
                 # update history
                 assert self.substr(in_end_pos) == '\n'
+                assert self.in_lines is not None
                 self.in_lines.append(
                     (self.home, in_end_pos + 1)
                 )
@@ -992,6 +1026,7 @@ class ShellTab(OutputView):
                 assert self.cursor == self.size()
                 end = self.size() - 1
                 assert self.substr(end) == '\n'
+                assert self.in_lines is not None
                 self.in_lines.append((self.home, end))
                 self.set_scope('sgr.magenta-on-default')
                 self.write('> ')
@@ -1004,10 +1039,12 @@ class ShellTab(OutputView):
             self.prompt_text = ''
 
     def handle_prompt_end(self, part, now):
+        # type: (str, datetime) -> None
         # end prompt
         if self.prompt_type == '1':
             # output ends, command input starts
             if self.buffered:
+                assert self.shell is not None
                 self.shell.send(self.buffered)
                 self.buffered = ''
             status, pwd = self.prompt_text.split('@', 1)
@@ -1073,15 +1110,17 @@ class ShellTab(OutputView):
         self.prompt_type = None
 
     def set_time(self):
+        # type: () -> datetime
         now = datetime.now(timezone.utc)
         if self.out_start_time is not None:
             elapsed = (now - self.out_start_time).total_seconds()
             if elapsed > 0.2:
                 # don't show time immediately, to avoid flashing
-                self.set_title(timedelta_seconds(elapsed))
+                self.set_title(str(timedelta_seconds(elapsed)))
         return now
 
     def once(self):
+        # type: () -> bool|None
         if self.shell is not None:
             if self.shell.ready():
                 s = self.shell.receive()
@@ -1096,6 +1135,7 @@ class ShellTab(OutputView):
         return None
 
     def loop(self):
+        # type: () -> None
         try:
             next = self.once()
             if next is True:
@@ -1113,6 +1153,7 @@ class ShellTab(OutputView):
 
 
 def _set_browse_mode(view):
+    # type: (sublime.View) -> bool
     settings = view.settings()
     follow = settings.get('gidterm_follow')
     if follow:
@@ -1124,6 +1165,7 @@ def _set_browse_mode(view):
 
 
 def _set_terminal_mode(view):
+    # type: (sublime.View) -> bool
     settings = view.settings()
     follow = settings.get('gidterm_follow')
     if not follow:
@@ -1152,6 +1194,7 @@ class GidtermEraseTextCommand(sublime_plugin.TextCommand):
 
 
 def create_init_file(contents):
+    # type: (str) -> str
     cachedir = os.path.expanduser('~/.cache/sublime-gidterm/profile')
     os.makedirs(cachedir, exist_ok=True)
     with tempfile.NamedTemporaryFile('w', dir=cachedir, delete=False) as f:
@@ -1161,6 +1204,7 @@ def create_init_file(contents):
 
 
 def _get_package_location(winvar):
+    # type: (dict[str, str]) -> str
     packages = winvar['packages']
     this_package = os.path.dirname(__file__)
     assert this_package.startswith(packages)
@@ -1170,12 +1214,14 @@ def _get_package_location(winvar):
 
 
 def get_initial_profile():
+    # type: () -> str
     this_package = os.path.dirname(__file__)
     config = os.path.join(this_package, 'config')
     return 'declare -- GIDTERM_CONFIG="{}"\n'.format(config) + _initial_profile
 
 
 def create_view(window, pwd, init_script):
+    # type: (sublime.Window, str, str) -> sublime.View
     winvar = window.extract_variables()
     package = _get_package_location(winvar)
     if pwd is None:
@@ -1230,6 +1276,7 @@ class GidtermCommand(sublime_plugin.TextCommand):
 
 
 def get_gidterm_view(view, start=False):
+    # type: (sublime.View, bool) -> ShellTab
     view_id = view.id()
     gview = _viewmap.get(view_id)
     if gview is None:
