@@ -12,6 +12,10 @@ cd ~/.config/sublime-text-3/Packages
 git clone git@github.com:jongiddy/sublime-gidterm.git
 ```
 
+GidTerm is designed to work well with [GidOpen](https://github.com/jongiddy/sublime-gidopen).
+GidOpen provides a context menu that appears when you right-click on a path, allowing you to view the path in a tab.
+This allows simple access to files from an `ls` command or contained in build error messages.
+
 ## Update
 
 Update by pulling the latest version.
