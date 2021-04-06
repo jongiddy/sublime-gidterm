@@ -4,18 +4,19 @@ import errno
 import os
 import pty
 import re
-import select
+from select import select
 import shlex
 import signal
+import sys
 import tempfile
 
 import sublime  # type: ignore
 import sublime_plugin  # type: ignore
 
-_viewmap = {}  # type: dict[sublime.View, ShellTab]
+this_package = os.path.dirname(__file__)
+config_dir = os.path.join(this_package, 'config')
 
-
-_initial_profile = r'''
+_initial_profile = rb'''
 # Read the standard profile, to give a familiar environment.  The profile can
 # detect that it is in GidTerm using the `TERM_PROGRAM` environment variable.
 export TERM_PROGRAM=Sublime-GidTerm
@@ -68,8 +69,10 @@ export PAGER=cat
 export HISTIGNORE=${HISTIGNORE:+${HISTIGNORE}:}'*# [@gidterm@]'
 
 # Specific configuration to make applications work well with GidTerm
+GIDTERM_CONFIG="''' + config_dir.encode(sys.getfilesystemencoding()) + b'''"
 export RIPGREP_CONFIG_PATH=${GIDTERM_CONFIG}/ripgrep
 '''
+
 
 _exit_status_info = {}  # type: dict[str, str]
 
@@ -95,7 +98,7 @@ def gidterm_decode_error(e):
     except UnicodeDecodeError:
         # If even that can't decode, fallback to using Unicode replacement char
         s = b.decode('utf8', 'replace')
-    print('gidterm: [WARN] {}: replacing {!r} with {!r}'.format(
+    print('GidTerm: [WARN] {}: replacing {!r} with {!r}'.format(
         e.reason, b, s.encode('utf8')
     ))
     return s, e.end
@@ -106,8 +109,9 @@ codecs.register_error('gidterm', gidterm_decode_error)
 
 class Shell:
 
-    def __init__(self):
-        # type: () -> None
+    def __init__(self, handle_output):
+        # type: (...) -> None
+        self.handle_output = handle_output
         self.pid = None  # type: int|None
         self.fd = None  # type: int|None
         utf8_decoder_factory = codecs.getincrementaldecoder('utf8')
@@ -151,6 +155,7 @@ class Shell:
             # child
             os.chdir(workdir)
             os.execvpe('bash', args, env)
+        sublime.set_timeout(self.loop, 100)
 
     def send(self, s):
         # type: (str) -> bool
@@ -165,7 +170,7 @@ class Shell:
         fd = self.fd
         if fd is None:
             return False
-        rfds, wfds, xfds = select.select([fd], [], [], 0)
+        rfds, wfds, xfds = select((fd,), (), (), 0)
         return fd in rfds
 
     def receive(self):
@@ -179,6 +184,32 @@ class Shell:
             raise
         return self.decoder.decode(buf, final=not buf)
 
+    def check(self):
+        # type: () -> bool|None
+        if not self.ready():
+            return False
+        s = self.receive()
+        self.handle_output(s)
+        if s:
+            return True
+        return None
+
+    def loop(self):
+        # type: () -> None
+        try:
+            next = self.check()
+            if next is True:
+                # output was handled
+                sublime.set_timeout(self.loop, 10)
+            elif next is False:
+                # no output ready, but connection open
+                sublime.set_timeout(self.loop, 100)
+            else:
+                # connection closed
+                self.close()
+        except Exception:
+            self.close()
+            raise
 
 def timedelta_seconds(seconds):
     # type: (float) -> timedelta
@@ -192,572 +223,178 @@ ELLIPSIS = '\u2025'
 LONG_ELLIPSIS = '\u2026'
 
 
-class OutputView(sublime.View):
+panel_cache = {}  # type: dict[int, DisplayPanel|TerminalPanel]
 
-    def __init__(self, view_id):
-        # type: (int) -> None
-        super().__init__(view_id)
-        self.cursor = self.home = self.size()  # type: int
-        self.scope = None  # type: str|None
 
-    def set_title(self, extra=''):
-        # type: (str) -> None
-        if extra:
-            size = TITLE_LENGTH - len(extra) - 1
-            name = '{}\ufe19{}'.format(self.get_label(size), extra)
-        else:
-            name = self.get_label(TITLE_LENGTH)
-        self.set_name(name)
+def cache_panel(view, panel):
+    panel_cache[view.id()] = panel
 
-    def set_scope(self, scope):
-        # type: (str|None) -> None
-        self.scope = scope
 
-    def move_cursor(self):
-        # type: () -> None
-        follow = self.settings().get('gidterm_follow')
-        if follow:
-            sel = self.sel()
-            sel.clear()
-            sel.add(self.cursor)
-            self.show(self.cursor)
+def uncache_panel(view):
+    del panel_cache[view.id()]
 
-    def insert_text(self, text):
-        # type: (str) -> None
-        start = self.cursor
-        end = start + len(text)
-        if start == self.size():
-            self.run_command(
-                'append',
-                {'characters': text, 'force': True, 'scroll_to_end': False}
-            )
-            if end != self.size():
-                print(
-                    'gidterm: [WARN] cursor not at end after inserting'
-                    ' {!r}'.format(text)
-                )
-                end = self.size()
-        else:
-            self.set_read_only(False)
-            try:
-                self.run_command(
-                    'gidterm_insert_text', {'point': start, 'characters': text}
-                )
-            finally:
-                self.set_read_only(True)
 
-        if self.scope is not None:
-            regions = self.get_regions(self.scope)
-            if regions and regions[-1].end() == start:
-                prev = regions.pop()
-                region = sublime.Region(prev.begin(), end)
-            else:
-                region = sublime.Region(start, end)
-            regions.append(region)
-            self.add_regions(
-                self.scope, regions, self.scope,
+def get_panel(view):
+    return panel_cache.get(view.id())
+
+
+class CommandHistory:
+
+    def __init__(self, view):
+        self.settings = view.settings()
+        self.load()
+
+    def load(self):
+        # Settings only saves bool, int, float, str, dict, list (with
+        # tuples converted to lists).
+        # list[int, int] is Region(begin, end) as setting
+        # next list is multiple Region's for a multi-line command
+        # next list is each command
+        self.value = self.settings.get('gidterm_command_history1', [])  # type: list[list[list[int, int]]]
+
+    def save(self):
+        self.settings.set('gidterm_command_history1', self.value)
+
+
+def _get_package_location(winvar):
+    # type: (dict[str, str]) -> str
+    packages = winvar['packages']
+    this_package = os.path.dirname(__file__)
+    assert this_package.startswith(packages)
+    unwanted = os.path.dirname(packages)
+    # add one to remove pathname delimiter /
+    return this_package[len(unwanted) + 1:]
+
+class GidTermPanel:
+
+    def __init__(self, view):
+        # type: (sublime.View) -> None
+        winvar = view.window().extract_variables()
+        package = _get_package_location(winvar)
+
+        view.set_read_only(True)
+        view.set_scratch(True)
+        view.set_line_endings('Unix')
+        settings = view.settings()
+        settings.set('is_gidterm', True)
+        settings.set(
+            'color_scheme',
+            os.path.join(package, 'gidterm.sublime-color-scheme')
+        )
+        # prevent ST doing work that doesn't help here
+        settings.set('mini_diff', False)
+        settings.set('spell_check', False)
+        # state
+        settings.set('gidterm_command_history', [])
+
+        cache_panel(view, self)
+
+        self.view = view
+        self.winvar = winvar
+
+
+class DisplayPanel(GidTermPanel):
+
+    def __init__(self, view, pwd, init_file_contents):
+        # type: (sublime.View, str, str) -> None
+        super().__init__(view)
+        if pwd is None:
+            pwd = self.winvar.get('folder', os.environ.get('HOME', '/'))
+        if init_file_contents is None:
+            init_file_contents = _initial_profile
+
+        init_file = self.create_init_file(init_file_contents)
+
+        settings = view.settings()
+        settings.set('is_gidterm_output', True)
+        settings.set('current_working_directory', pwd)
+        settings.set('gidterm_init_file', init_file)
+
+        self.command_history = CommandHistory(view)
+        self.pwd = pwd
+        self.init_file = self.create_init_file(init_file_contents)
+
+    def get_display_panel(self):
+        # type: () -> DisplayPanel
+        return self
+
+    def setpwd(self, pwd):
+        self.pwd = pwd
+        settings = self.view.settings()
+        settings.set('current_working_directory', pwd)
+
+    def getpwd(self):
+        # type: () -> str
+        return self.pwd
+
+    def create_init_file(self, contents):
+        # type: (bytes) -> str
+        cachedir = os.path.expanduser('~/.cache/sublime-gidterm/profile')
+        os.makedirs(cachedir, exist_ok=True)
+        fd, name = tempfile.mkstemp(dir=cachedir)
+        contents += b'declare -- GIDTERM_CACHE="' + name.encode(sys.getfilesystemencoding()) + b'"\n'
+        os.write(fd, contents)
+        return name
+
+    def get_init_file(self):
+        # type: () -> str
+        # return pathname to initfile
+        init_file = self.init_file
+        if not os.path.exists(init_file):
+            init_file = self.create_init_file(_initial_profile)
+            self.view.settings().set('gidterm_init_file', init_file)
+            self.init_file = init_file
+        return init_file
+
+    def append_text(self, text, scopes):
+        # type: (str, dict[str, list[Region]]) -> None
+        pos = self.view.size()
+        # `force` to override read_only state
+        self.view.run_command('append', {'characters': text, 'force': True, 'scroll_to_end': False})
+        for scope, new_regions in scopes.items():
+            regions = self.view.get_regions(scope)
+            for new_region in new_regions:
+                begin = new_region.begin() + pos
+                end = new_region.end() + pos
+                if regions and regions[-1].end() == begin:
+                    # merge into previous region
+                    prev = regions.pop()
+                    region = sublime.Region(prev.begin(), end)
+                else:
+                    region = sublime.Region(begin, end)
+                regions.append(region)
+            self.view.add_regions(
+                scope, regions, scope,
                 flags=sublime.DRAW_NO_OUTLINE | sublime.PERSISTENT
             )
 
-        self.cursor = end
+    def terminal_panel_name(self):
+        # type: () -> str
+        view_id = self.view.id()
+        return 'gidterm{}'.format(view_id)
 
-    def write(self, text):
+    def handle_input(self, text):
         # type: (str) -> None
-        start = self.cursor
-        end = start + len(text)
-        if start == self.size():
-            self.run_command(
-                'append',
-                {'characters': text, 'force': True, 'scroll_to_end': False}
-            )
-            if end != self.size():
-                print(
-                    'gidterm: [WARN] cursor not at end after writing'
-                    ' {!r}'.format(text)
-                )
-                end = self.size()
-        else:
-            # Overwrite text to end of line, then insert additional text
-            classification = self.classify(start)
-            if classification & sublime.CLASS_LINE_END:
-                replace_end = start
-            else:
-                replace_end = self.find_by_class(
-                    start,
-                    forward=True,
-                    classes=sublime.CLASS_LINE_END
-                )
-            if end < replace_end:
-                replace_end = end
-            self.set_read_only(False)
-            try:
-                self.run_command(
-                    'gidterm_replace_text',
-                    {'begin': start, 'end': replace_end, 'characters': text}
-                )
-            finally:
-                self.set_read_only(True)
+        panel_name = self.terminal_panel_name()
+        window = self.view.window()
+        view = window.find_output_panel(panel_name)
+        if view is None:
+            view = window.create_output_panel(panel_name)
+        window.run_command('show_panel', {'panel': 'output.{}'.format(panel_name)})
+        terminal_panel = get_panel(view)
+        if terminal_panel is None:
+            terminal_panel = TerminalPanel(view, self)
+        terminal_panel.handle_input(text)
 
-        if self.scope is not None:
-            regions = self.get_regions(self.scope)
-            if regions and regions[-1].end() == start:
-                prev = regions.pop()
-                region = sublime.Region(prev.begin(), end)
-            else:
-                region = sublime.Region(start, end)
-            regions.append(region)
-            self.add_regions(
-                self.scope, regions, self.scope,
-                flags=sublime.DRAW_NO_OUTLINE | sublime.PERSISTENT
-            )
-
-        self.cursor = end
-
-    def erase(self, begin, end):
-        # type: (int, int) -> None
-        classification = self.classify(begin)
-        if classification & sublime.CLASS_LINE_END:
-            eol = begin
-        else:
-            eol = self.find_by_class(
-                begin,
-                forward=True,
-                classes=sublime.CLASS_LINE_END
-            )
-        if eol <= end:
-            self.delete(begin, eol)
-        else:
-            length = end - begin
-            if length > 0:
-                self.set_read_only(False)
-                try:
-                    self.run_command(
-                        'gidterm_replace_text',
-                        {
-                            'begin': begin,
-                            'end': end,
-                            'characters': '\ufffd' * length,
-                        }
-                    )
-                finally:
-                    self.set_read_only(True)
-
-    def delete(self, begin, end):
-        # type: (int, int) -> None
-        if begin < end:
-            self.set_read_only(False)
-            self.run_command(
-                'gidterm_erase_text', {'begin': begin, 'end': end},
-            )
-            self.set_read_only(True)
-
-    def handle_control(self, part):
+    def set_tab_label(self, title):
         # type: (str) -> None
-        if part == '\x07':
-            return
-        if part[0] == '\x08':
-            n = len(part)
-            self.cursor = self.cursor - n
-            if self.cursor < self.home:
-                self.cursor = self.home
-            return
-        if part[0] == '\r':
-            # move cursor to start of line
-            classification = self.classify(self.cursor)
-            if not classification & sublime.CLASS_LINE_START:
-                bol = self.find_by_class(
-                    self.cursor,
-                    forward=False,
-                    classes=sublime.CLASS_LINE_START
-                )
-                self.cursor = bol
-            return
-        if part == '\n':
-            row, col = self.rowcol(self.cursor)
-            end = self.size()
-            maxrow, _ = self.rowcol(end)
-            if row == maxrow:
-                self.cursor = end
-                self.write('\n')
-            else:
-                row += 1
-                cursor = self.text_point(row, col)
-                if self.rowcol(cursor)[0] > row:
-                    cursor = self.text_point(row + 1, 0) - 1
-                self.cursor = cursor
-            return
-        print('gidterm: [WARN] unknown control: {!r}'.format(part))
-        self.write(part)
-
-    def handle_escape(self, part):
-        # type: (str) -> None
-        if part[1] != '[':
-            assert part[1] in '()*+]', part
-            # ignore codeset and set-title
-            return
-        command = part[-1]
-        if command == 'm':
-            arg = part[2:-1]
-            if not arg:
-                self.scope = None
-                return
-            fg = 'default'
-            bg = 'default'
-            nums = arg.split(';')
-            i = 0
-            while i < len(nums):
-                num = nums[i]
-                if num in ('0', '00'):
-                    fg = 'default'
-                    bg = 'default'
-                elif num in ('1', '01', '2', '02', '22'):
-                    # TODO: handle bold/faint intensity
-                    pass
-                elif num.startswith('1') and len(num) == 2:
-                    # TODO: handle these
-                    pass
-                elif num == '30':
-                    fg = 'black'
-                elif num == '31':
-                    fg = 'red'
-                elif num == '32':
-                    fg = 'green'
-                elif num == '33':
-                    fg = 'yellow'
-                elif num == '34':
-                    fg = 'blue'
-                elif num == '35':
-                    fg = 'cyan'
-                elif num == '36':
-                    fg = 'magenta'
-                elif num == '37':
-                    fg = 'white'
-                elif num == '38':
-                    i += 1
-                    selector = nums[i]
-                    if selector == '2':
-                        # r, g, b
-                        i += 3
-                        continue
-                    elif selector == '5':
-                        # 8-bit
-                        idx = int(nums[i + 1])
-                        if idx < 8:
-                            nums[i + 1] = str(30 + idx)
-                        elif idx < 16:
-                            nums[i + 1] = str(90 + idx - 8)
-                        elif idx >= 254:
-                            nums[i + 1] = '97'  # mostly white
-                        elif idx >= 247:
-                            nums[i + 1] = '37'   # light grey
-                        elif idx >= 240:
-                            nums[i + 1] = '90'   # dark grey
-                        elif idx >= 232:
-                            nums[i + 1] = '30'   # mostly black
-                        else:
-                            assert 16 <= idx <= 231, idx
-                            rg, b = divmod(idx - 16, 6)
-                            r, g = divmod(rg, 6)
-                            r //= 3
-                            g //= 3
-                            b //= 3
-                            x = {
-                                (0, 0, 0): '90',
-                                (0, 0, 1): '94',
-                                (0, 1, 0): '92',
-                                (0, 1, 1): '96',
-                                (1, 0, 0): '91',
-                                (1, 0, 1): '95',
-                                (1, 1, 0): '93',
-                                (1, 1, 1): '37',
-                            }
-                            nums[i + 1] = x[(r, g, b)]
-                elif num == '39':
-                    fg = 'default'
-                elif num == '40':
-                    bg = 'black'
-                elif num == '41':
-                    bg = 'red'
-                elif num == '42':
-                    bg = 'green'
-                elif num == '43':
-                    bg = 'yellow'
-                elif num == '44':
-                    bg = 'blue'
-                elif num == '45':
-                    bg = 'cyan'
-                elif num == '46':
-                    bg = 'magenta'
-                elif num == '47':
-                    bg = 'white'
-                elif num == '48':
-                    i += 1
-                    selector = nums[i]
-                    if selector == '2':
-                        # r, g, b
-                        i += 3
-                    elif selector == '5':
-                        # 8-bit
-                        idx = int(nums[i + 1])
-                        if idx < 8:
-                            nums[i + 1] = str(40 + idx)
-                        elif idx < 16:
-                            nums[i + 1] = str(100 + idx - 8)
-                        elif idx >= 254:
-                            nums[i + 1] = '107'  # mostly white
-                        elif idx >= 247:
-                            nums[i + 1] = '47'   # light grey
-                        elif idx >= 240:
-                            nums[i + 1] = '100'   # dark grey
-                        elif idx >= 232:
-                            nums[i + 1] = '40'   # mostly black
-                        else:
-                            assert 16 <= idx <= 231, idx
-                            rg, b = divmod(idx - 16, 6)
-                            r, g = divmod(rg, 6)
-                            r //= 3
-                            g //= 3
-                            b //= 3
-                            x = {
-                                (0, 0, 0): '100',
-                                (0, 0, 1): '104',
-                                (0, 1, 0): '102',
-                                (0, 1, 1): '106',
-                                (1, 0, 0): '101',
-                                (1, 0, 1): '105',
-                                (1, 1, 0): '103',
-                                (1, 1, 1): '47',
-                            }
-                            nums[i + 1] = x[(r, g, b)]
-                elif num == '49':
-                    bg = 'default'
-                elif num == '90':
-                    fg = 'brightblack'
-                elif num == '91':
-                    fg = 'brightred'
-                elif num == '92':
-                    fg = 'brightgreen'
-                elif num == '93':
-                    fg = 'brightyellow'
-                elif num == '94':
-                    fg = 'brightblue'
-                elif num == '95':
-                    fg = 'brightcyan'
-                elif num == '96':
-                    fg = 'brightmagenta'
-                elif num == '97':
-                    fg = 'brightwhite'
-                elif num == '100':
-                    bg = 'brightblack'
-                elif num == '101':
-                    bg = 'brightred'
-                elif num == '102':
-                    bg = 'brightgreen'
-                elif num == '103':
-                    bg = 'brightyellow'
-                elif num == '104':
-                    bg = 'brightblue'
-                elif num == '105':
-                    bg = 'brightcyan'
-                elif num == '106':
-                    bg = 'brightmagenta'
-                elif num == '107':
-                    bg = 'brightwhite'
-                else:
-                    print(
-                        'gidterm: [WARN] Unhandled SGR code: {} in {}'.format(
-                            num, part
-                        )
-                    )
-                i += 1
-            scope = 'sgr.{}-on-{}'.format(fg, bg)  # type: str|None
-            if scope == 'sgr.default-on-default':
-                scope = None
-            self.scope = scope
-            return
-        if command == '@':
-            arg = part[2:-1]
-            if arg:
-                n = int(arg)
-            else:
-                n = 1
-            # keep cursor at start
-            cursor = self.cursor
-            self.insert_text('\ufffd' * n)
-            self.cursor = cursor
-            return
-        if command == 'A':
-            # up
-            arg = part[2:-1]
-            if arg:
-                n = int(arg)
-            else:
-                n = 1
-            row, col = self.rowcol(self.cursor)
-            row -= n
-            if row < 0:
-                row = 0
-            cursor = self.text_point(row, col)
-            if self.rowcol(cursor)[0] > row:
-                cursor = self.text_point(row + 1, 0) - 1
-            self.cursor = cursor
-            return
-        if command == 'B':
-            # down
-            arg = part[2:-1]
-            if arg:
-                n = int(arg)
-            else:
-                n = 1
-            row, col = self.rowcol(self.cursor)
-            row += n
-            cursor = self.text_point(row, col)
-            if self.rowcol(cursor)[0] > row:
-                cursor = self.text_point(row + 1, 0) - 1
-            self.cursor = cursor
-            return
-        if command == 'C':
-            # right
-            arg = part[2:-1]
-            if arg:
-                n = int(arg)
-            else:
-                n = 1
-            n = min(n, self.size() - self.cursor)
-            self.cursor += n
-            # Use the `move` command because `self.move_cursor` does nothing if
-            # we just change the value of `self.cursor` without changing text.
-            for i in range(n):
-                self.run_command(
-                    'move', {"by": "characters", "forward": True}
-                )
-            return
-        if command == 'D':
-            # left
-            arg = part[2:-1]
-            if arg:
-                n = int(arg)
-            else:
-                n = 1
-            self.cursor = max(n, self.cursor)
-            self.cursor -= n
-            # Use the `move` command because `self.move_cursor` does nothing if
-            # we just change the value of `self.cursor` without changing text.
-            for i in range(n):
-                self.run_command(
-                    'move', {"by": "characters", "forward": False}
-                )
-            return
-        if command in ('H', 'f'):
-            # home
-            arg = part[2:-1]
-            if not arg:
-                hrow = 0
-                hcol = 0
-            elif ';' in arg:
-                parts = arg.split(';')
-                hrow = int(parts[0]) - 1
-                hcol = int(parts[1]) - 1
-            else:
-                hrow = int(arg) - 1
-                hcol = 0
-            row, col = self.rowcol(self.home)
-            row += hrow
-            col += hcol
-            cursor = self.text_point(row, col)
-            if self.rowcol(cursor)[0] > row:
-                cursor = self.text_point(row + 1, 0) - 1
-            self.cursor = cursor
-            return
-        if command == 'K':
-            arg = part[2:-1]
-            if not arg or arg == '0':
-                # clear to end of line
-                classification = self.classify(self.cursor)
-                if not classification & sublime.CLASS_LINE_END:
-                    eol = self.find_by_class(
-                        self.cursor,
-                        forward=True,
-                        classes=sublime.CLASS_LINE_END
-                    )
-                    self.erase(self.cursor, eol)
-                return
-            elif arg == '1':
-                # clear to start of line
-                classification = self.classify(self.cursor)
-                if not classification & sublime.CLASS_LINE_START:
-                    bol = self.find_by_class(
-                        self.cursor,
-                        forward=False,
-                        classes=sublime.CLASS_LINE_START
-                    )
-                    self.erase(bol, self.cursor)
-                return
-            elif arg == '2':
-                # clear line
-                classification = self.classify(self.cursor)
-                if classification & sublime.CLASS_LINE_START:
-                    bol = self.cursor
-                else:
-                    bol = self.find_by_class(
-                        self.cursor,
-                        forward=False,
-                        classes=sublime.CLASS_LINE_START
-                    )
-                if classification & sublime.CLASS_LINE_END:
-                    eol = self.cursor
-                else:
-                    eol = self.find_by_class(
-                        self.cursor,
-                        forward=True,
-                        classes=sublime.CLASS_LINE_END
-                    )
-                self.erase(bol, eol)
-                return
-        if command == 'P':
-            # delete n
-            n = int(part[2:-1])
-            end = self.cursor + n
-            self.delete(self.cursor, end)
-            return
-        if command in ('E', 'F', 'G', 'J'):
-            # we don't handle other cursor movements, since we lie
-            # about the screen width, so apps will get confused. We
-            # ensure we are at the start of a line when we see them.
-            pos = self.size()
-            col = self.rowcol(pos)[1]
-            if col == 0:
-                self.cursor = pos
-            else:
-                # at end of last line
-                self.write('\n')
-
-        print('gidterm: [WARN] unknown escape: {!r}'.format(part))
-
-    def display_status(self, status, ret_scope, elapsed):
-        # type: (str, str, timedelta) -> None
-        output_end = self.size()
-        col = self.rowcol(output_end)[1]
-        self.cursor = output_end
-        if col != 0:
-            self.write('\n')
-        if status == '0':
-            self.set_scope('sgr.green-on-default')
-        else:
-            self.set_scope('sgr.red-on-default')
-        self.write(status)
-        info = _exit_status_info.get(status)
-        if info:
-            self.set_scope('sgr.yellow-on-default')
-            self.write(info)
-        self.set_scope(ret_scope)
-        self.write('\u23ce')
-        self.set_scope(None)
-        self.write(' {}\n'.format(elapsed))
+        self.view.set_name(title)
 
 
-class ShellTab(OutputView):
+class TerminalPanel(GidTermPanel):
 
+    # Pattern to match control characters from the terminal that
+    # need to be handled specially.
     _escape_pat = re.compile(
         r'('
         r'\x07|'                                        # BEL
@@ -771,36 +408,93 @@ class ShellTab(OutputView):
         r'))'
     )
 
+    # Pattern to match the prefix of above. If it occurs at the end of
+    # text, wait for more text to find escape.
     _partial_pat = re.compile(
         r'\x1b([()*+]|\](?:0;?)?.*|\[[\x30-\x3f]*[\x20-\x2f]*)?$'
     )
 
-    def __init__(self, view_id):
-        # type: (int) -> None
-        super().__init__(view_id)
-        _viewmap[view_id] = self
-        history = self.settings().get('gidterm_pwd')  # type: list[tuple[int, str]]  # noqa
-        self.pwd = history[-1][1]  # type: str
-        self.command = []  # type: list[str]
-        self.set_title()
+    def __init__(self, view, display_panel):
+        # type: (sublime.View, DisplayPanel) -> None
+        super().__init__(view)
+        settings = view.settings()
+        settings.set('is_gidterm_terminal', True)
 
-        # `cursor` is the location of the input cursor. It is often the end of
-        # the doc but may be earlier if the LEFT key is used, or during
-        # command history rewriting.
-        self.cursor = self.size()  # type: int
-        self.in_lines = None  # type: list[tuple[int, int]]|None
-        self.out_start_time = None  # type: datetime|None
-        self.prompt_type = None  # type: str|None
-        self.scope = None  # type: str|None
-        self.saved = ''  # type: str
+        self.display_panel = display_panel
+
+        # State of the forked shell
         self.shell = None  # type: Shell|None
-        self.disconnected = False  # type: bool
-        self.loop_active = False  # type: bool
         self.buffered = ''  # type: str
 
-        _set_browse_mode(self)
+        # State of the output stream
+        self.cursor = self.home = view.size()  # type: int
+        self.scope = ''  # type: str
+        self.saved = ''  # type: str
 
-    def get_label(self, size):
+        # Things that get set during command execution
+        self.command = []  # type: list[str]
+        self.prompt_text = ''
+        self.prompt_type = None  # type: str|None
+        self.in_lines = None  # type: list[tuple[int, int]]|None
+        self.out_start_time = None  # type: datetime|None
+        self.out_stop_time = None  # type: datetime|None
+
+        self._csi_map = {
+            '@': self.handle_csi_at,
+            'A': self.handle_csi_A,
+            'B': self.handle_csi_B,
+            'C': self.handle_csi_C,
+            'D': self.handle_csi_D,
+            'E': self.handle_csi_ignore,
+            'F': self.handle_csi_ignore,
+            'G': self.handle_csi_ignore,
+            'H': self.handle_csi_moveto,
+            'J': self.handle_csi_ignore,
+            'K': self.handle_csi_K,
+            'P': self.handle_csi_P,
+            'f': self.handle_csi_moveto,
+            'm': self.handle_rendition,
+        }
+
+    def get_display_panel(self):
+        # type: () -> DisplayPanel
+        return self.display_panel
+
+    def handle_input(self, text):
+        # type: (str) -> None
+        if self.shell is None:
+            self.shell = self.start_shell()
+            self.buffered = text
+        elif self.buffered:
+            self.buffered += text
+        else:
+            self.shell.send(text)
+
+    def start_shell(self):
+        # type: (int) -> Shell
+        shell = Shell(self.handle_output)
+        display_panel = self.get_display_panel()
+        pwd = display_panel.getpwd()
+        init_file = display_panel.get_init_file()
+        shell.fork(pwd, init_file)
+        return shell
+
+    def send_buffered(self):
+        assert self.shell is not None
+        if self.buffered:
+            self.shell.send(self.buffered)
+            self.buffered = ''
+
+    def set_title(self, extra=''):
+        # type: (str) -> None
+        if extra:
+            size = TITLE_LENGTH - len(extra) - 1
+            name = '{}\ufe19{}'.format(self.make_label(size), extra)
+        else:
+            name = self.make_label(TITLE_LENGTH)
+        self.display_panel.set_tab_label(name)
+
+    def make_label(self, size):
         # type: (int) -> str
         if size < 3:
             if size == 0:
@@ -891,63 +585,90 @@ class ShellTab(OutputView):
             left = ''
         return '{}{}{}'.format(left, PROMPT, right)
 
-    def disconnect(self):
-        # type: () -> None
-        if self.shell is not None:
-            self.shell.close()
-            self.shell = None
-        _set_browse_mode(self)
-
-    def send(self, s):
+    def write(self, text):
         # type: (str) -> None
-        if self.shell is None:
-            self.shell = Shell()
-            self.start(50)
-            self.buffered = s
-        elif self.buffered:
-            self.buffered += s
+        view = self.view
+        start = self.cursor
+        end = start + len(text)
+        if start == view.size():
+            view.run_command('append', {'characters': text, 'force': True, 'scroll_to_end': True})
+            if end != view.size():
+                print('GidTerm: [WARN] cursor not at end after writing {!r}'.format(text))
+                end = view.size()
         else:
-            self.shell.send(s)
+            # Overwrite text to end of line, then insert additional text
+            classification = view.classify(start)
+            if classification & sublime.CLASS_LINE_END:
+                replace_end = start
+            else:
+                replace_end = view.find_by_class(start, forward=True, classes=sublime.CLASS_LINE_END)
+            if end < replace_end:
+                replace_end = end
+            view.set_read_only(False)
+            try:
+                view.run_command('gidterm_replace_text', {'begin': start, 'end': replace_end, 'characters': text})
+            finally:
+                view.set_read_only(True)
 
-    def start(self, wait):
-        # type: (int) -> None
-        settings = self.settings()
-        init_file = settings.get('gidterm_init_file')
-        if not os.path.exists(init_file):
-            init_script = settings.get('gidterm_init', get_initial_profile())
-            init_file = create_init_file(init_script)
-            settings.set('gidterm_init_file', init_file)
-        self.shell = Shell()
-        self.shell.fork(os.path.expanduser(self.pwd), init_file)
-        _set_terminal_mode(self)
-        self.move_cursor()
-        if wait is not None:
-            if not self.loop_active:
-                self.loop_active = True
-                sublime.set_timeout(self.loop, wait)
+        if self.scope is not None:
+            regions = view.get_regions(self.scope)
+            if regions and regions[-1].end() == start:
+                prev = regions.pop()
+                region = sublime.Region(prev.begin(), end)
+            else:
+                region = sublime.Region(start, end)
+            regions.append(region)
+            view.add_regions(self.scope, regions, self.scope, flags=sublime.DRAW_NO_OUTLINE | sublime.PERSISTENT)
 
-    def at_prompt(self):
-        # type: () -> bool
-        if self.in_lines is None:
-            # currently displaying output
-            return False
-        return self.cursor == self.home
+        self.cursor = end
 
-    def at_cursor(self):
-        # type: () -> bool
-        cursor = self.cursor
-        for region in self.sel():
-            if region.begin() != cursor or region.end() != cursor:
-                return False
-        return True
+    def erase(self, begin, end):
+        # type: (int, int) -> None
+        # Erase the region without shifting characters after the region. This
+        # may require replacing the erased characters with placeholders.
+        view = self.view
+        classification = view.classify(begin)
+        if classification & sublime.CLASS_LINE_END:
+            eol = begin
+        else:
+            eol = view.find_by_class(begin, forward=True, classes=sublime.CLASS_LINE_END)
+        if eol <= end:
+            self.delete(begin, eol)
+        else:
+            length = end - begin
+            if length > 0:
+                view.set_read_only(False)
+                try:
+                    view.run_command(
+                        'gidterm_replace_text', {'begin': begin, 'end': end, 'characters': '\ufffd' * length}
+                    )
+                finally:
+                    view.set_read_only(True)
 
-    def handle_output(self, s, now):
-        # type:(str, datetime) -> None
+    def delete(self, begin, end):
+        # type: (int, int) -> None
+        # Delete the region, shifting any later characters into the space.
+        view = self.view
+        if begin < end:
+            view.set_read_only(False)
+            view.run_command('gidterm_erase_text', {'begin': begin, 'end': end})
+            view.set_read_only(True)
+            if self.cursor > end:
+                self.cursor -= (end - begin)
+            elif self.cursor > begin:
+                self.cursor = begin
+
+    def set_scope(self, scope):
+        # type: (str|None) -> None
+        self.scope = scope
+
+    def handle_output(self, text):
+        # type:(str) -> None
         # Add any saved text from previous iteration, split text on control
         # characters that are handled specially, then save any partial control
         # characters at end of text.
-        s = self.saved + s
-        parts = self._escape_pat.split(s)
+        text = self.saved + text
+        parts = self._escape_pat.split(text)
         last = parts[-1]
         match = self._partial_pat.search(last)
         if match:
@@ -967,21 +688,26 @@ class ShellTab(OutputView):
                     if part[0] == '\x1b':
                         command = part[-1]
                         if command == 'p':
-                            self.handle_prompt(part, now)
+                            self.handle_prompt(part)
                         else:
                             self.handle_escape(part)
                     else:
                         self.handle_control(part)
             else:
                 if not plain and part == '\x1b[~':
-                    self.handle_prompt_end(part, now)
+                    self.handle_prompt_end(part)
                 else:
                     self.prompt_text += part
 
-        self.move_cursor()
+        sel = self.view.sel()
+        sel.clear()
+        sel.add(self.cursor)
+        self.view.show(self.cursor)
 
-    def handle_prompt(self, part, now):
+    def handle_prompt(self, part):
         # type: (str, datetime) -> None
+        view = self.view
+        now = datetime.now(timezone.utc)
         arg = part[2:-1]
         if arg.endswith('!'):
             # standalone prompt
@@ -989,26 +715,26 @@ class ShellTab(OutputView):
             if prompt_type == '0':
                 # command input ends, output starts
                 # trim trailing spaces from input command
-                assert self.cursor == self.size()
-                end = self.size() - 1
-                assert self.substr(end) == '\n'
+                assert self.cursor == view.size()
+                end = self.cursor - 1
+                assert view.substr(end) == '\n'
                 in_end_pos = end
-                while self.substr(in_end_pos - 1) == ' ':
+                while view.substr(in_end_pos - 1) == ' ':
                     in_end_pos -= 1
                 self.delete(in_end_pos, end)
                 # update history
-                assert self.substr(in_end_pos) == '\n'
+                assert view.substr(in_end_pos) == '\n'
                 assert self.in_lines is not None
                 self.in_lines.append(
                     (self.home, in_end_pos + 1)
                 )
-                settings = self.settings()
+                settings = view.settings()
                 history = settings.get('gidterm_command_history')
                 history.append(self.in_lines)
                 settings.set('gidterm_command_history', history)
                 command = '\n'.join(
                     [
-                        self.substr(sublime.Region(b, e))
+                        view.substr(sublime.Region(b, e))
                         for b, e in self.in_lines
                     ]
                 )
@@ -1017,14 +743,14 @@ class ShellTab(OutputView):
                     words[0] = words[0].rsplit('/', 1)[-1]
                 self.command = words
                 self.in_lines = None
-                self.cursor = self.size()
+                self.cursor = view.size()
                 self.home = self.cursor
                 self.out_start_time = now
             elif prompt_type == '2':
                 # command input continues
-                assert self.cursor == self.size()
-                end = self.size() - 1
-                assert self.substr(end) == '\n'
+                assert self.cursor == view.size()
+                end = self.cursor - 1
+                assert view.substr(end) == '\n'
                 assert self.in_lines is not None
                 self.in_lines.append((self.home, end))
                 self.set_scope('sgr.magenta-on-default')
@@ -1036,19 +762,19 @@ class ShellTab(OutputView):
             assert self.prompt_type is None, self.prompt_type
             self.prompt_type = arg
             self.prompt_text = ''
+            if arg == '1':
+                self.out_stop_time = now
 
-    def handle_prompt_end(self, part, now):
+    def handle_prompt_end(self, part):
         # type: (str, datetime) -> None
         # end prompt
         if self.prompt_type == '1':
             # output ends, command input starts
-            if self.buffered:
-                assert self.shell is not None
-                self.shell.send(self.buffered)
-                self.buffered = ''
+            view = self.view
+            self.send_buffered()
             status, pwd = self.prompt_text.split('@', 1)
-            output_end = self.size()
-            col = self.rowcol(output_end)[1]
+            output_end = view.size()
+            col = view.rowcol(output_end)[1]
             if self.cursor == output_end:
                 if col == 0:
                     # cursor at end, with final newline
@@ -1061,31 +787,27 @@ class ShellTab(OutputView):
                 ret_scope = 'sgr.red-on-default'
             if self.out_start_time is not None:
                 elapsed = timedelta_seconds(
-                    (now - self.out_start_time).total_seconds()
+                    (self.out_stop_time - self.out_start_time).total_seconds()
                 )
-            if pwd != self.pwd:
-                settings = self.settings()
-                history = settings.get('gidterm_pwd')
-                history.append((output_end, pwd))
-                settings.set('gidterm_pwd', history)
-                settings.set('current_working_directory', pwd)  # for GidOpen
-                self.pwd = pwd
+            if pwd != self.display_panel.getpwd():
+                self.display_panel.setpwd(pwd)
                 # For `cd` avoid duplicating the name in the title to show more
                 # of the path. There's an implicit `status == '0'` here, since
                 # the directory doesn't change if the command fails.
                 if self.command and self.command[0] == 'cd':
                     self.command = []
             if self.out_start_time is None:
-                # generally, pressing Enter at an empty command line
+                # generally, pressing Enter at an empty command. line
                 self.command = []
             else:
                 # finished displaying output of command
                 self.display_status(status, ret_scope, elapsed)
                 self.out_start_time = None
+                self.out_stop_time = None
             if self.command:
-                self.set_title(status)
+                self.display_panel.set_title(status)
             else:
-                self.set_title()
+                self.display_panel.set_title()
 
             self.set_scope(None)
         else:
@@ -1108,6 +830,440 @@ class ShellTab(OutputView):
         self.in_lines = []
         self.prompt_type = None
 
+    def handle_control(self, part):
+        # type: (str) -> None
+        if part == '\x07':
+            return
+        if part[0] == '\x08':
+            n = len(part)
+            self.cursor = self.cursor - n
+            if self.cursor < self.home:
+                self.cursor = self.home
+            return
+        if part[0] == '\r':
+            # move cursor to start of line
+            classification = self.classify(self.cursor)
+            if not classification & sublime.CLASS_LINE_START:
+                bol = self.find_by_class(
+                    self.cursor,
+                    forward=False,
+                    classes=sublime.CLASS_LINE_START
+                )
+                self.cursor = bol
+            return
+        if part == '\n':
+            row, col = self.rowcol(self.cursor)
+            end = self.size()
+            maxrow, _ = self.rowcol(end)
+            if row == maxrow:
+                self.cursor = end
+                self.write('\n')
+            else:
+                row += 1
+                cursor = self.text_point(row, col)
+                if self.rowcol(cursor)[0] > row:
+                    cursor = self.text_point(row + 1, 0) - 1
+                self.cursor = cursor
+            return
+        print('GidTerm: [WARN] unknown control: {!r}'.format(part))
+        self.write(part)
+
+    def handle_escape(self, part):
+        # type: (str) -> None
+        if part[1] != '[':
+            assert part[1] in '()*+]', part
+            # ignore codeset and set-title
+            return
+        command = part[-1]
+        method = self._csi_map.get(command)
+        if method is None:
+            print('GidTerm: [WARN] Unhandled escape code: {!r}'.format(part))
+        else:
+            method(part[2:-1])
+
+    def handle_csi_ignore(self, arg):
+        # we don't handle some cursor movements, since we lie
+        # about the screen width, so apps will get confused. We
+        # ensure we are at the start of a line when we see them.
+        pos = self.size()
+        col = self.rowcol(pos)[1]
+        if col == 0:
+            self.cursor = pos
+        else:
+            # at end of last line
+            self.write('\n')
+
+    def handle_csi_at(self, arg):
+        if arg:
+            n = int(arg)
+        else:
+            n = 1
+        # keep cursor at start
+        cursor = self.cursor
+        self.insert_text('\ufffd' * n)
+        self.cursor = cursor
+
+    def handle_csi_A(self, arg):
+        # cursor up
+        if arg:
+            n = int(arg)
+        else:
+            n = 1
+        row, col = self.rowcol(self.cursor)
+        row -= n
+        if row < 0:
+            row = 0
+        cursor = self.text_point(row, col)
+        if self.rowcol(cursor)[0] > row:
+            cursor = self.text_point(row + 1, 0) - 1
+        self.cursor = cursor
+
+    def handle_csi_B(self, arg):
+        # cursor down
+        if arg:
+            n = int(arg)
+        else:
+            n = 1
+        row, col = self.rowcol(self.cursor)
+        row += n
+        cursor = self.text_point(row, col)
+        if self.rowcol(cursor)[0] > row:
+            cursor = self.text_point(row + 1, 0) - 1
+        self.cursor = cursor
+
+    def handle_csi_C(self, arg):
+        # cursor right
+        if arg:
+            n = int(arg)
+        else:
+            n = 1
+        n = min(n, self.size() - self.cursor)
+        self.cursor += n
+        # Use the `move` command because `self.move_cursor` does nothing if
+        # we just change the value of `self.cursor` without changing text.
+        for i in range(n):
+            self.run_command('move', {"by": "characters", "forward": True})
+
+    def handle_csi_D(self, arg):
+        # cursor left
+        if arg:
+            n = int(arg)
+        else:
+            n = 1
+        self.cursor = max(n, self.cursor)
+        self.cursor -= n
+        # Use the `move` command because `self.move_cursor` does nothing if
+        # we just change the value of `self.cursor` without changing text.
+        for i in range(n):
+            self.run_command(
+                'move', {"by": "characters", "forward": False}
+            )
+
+    def handle_csi_moveto(self, arg):
+        # cursor home
+        if not arg:
+            hrow = 0
+            hcol = 0
+        elif ';' in arg:
+            parts = arg.split(';')
+            hrow = int(parts[0]) - 1
+            hcol = int(parts[1]) - 1
+        else:
+            hrow = int(arg) - 1
+            hcol = 0
+        row, col = self.rowcol(self.home)
+        row += hrow
+        col += hcol
+        cursor = self.text_point(row, col)
+        if self.rowcol(cursor)[0] > row:
+            cursor = self.text_point(row + 1, 0) - 1
+        self.cursor = cursor
+
+    def handle_csi_K(self, arg):
+        # clear line
+        if not arg or arg == '0':
+            # clear to end of line
+            classification = self.classify(self.cursor)
+            if not classification & sublime.CLASS_LINE_END:
+                eol = self.find_by_class(
+                    self.cursor,
+                    forward=True,
+                    classes=sublime.CLASS_LINE_END
+                )
+                self.erase(self.cursor, eol)
+            return
+        elif arg == '1':
+            # clear to start of line
+            classification = self.classify(self.cursor)
+            if not classification & sublime.CLASS_LINE_START:
+                bol = self.find_by_class(
+                    self.cursor,
+                    forward=False,
+                    classes=sublime.CLASS_LINE_START
+                )
+                self.erase(bol, self.cursor)
+            return
+        elif arg == '2':
+            # clear line
+            classification = self.classify(self.cursor)
+            if classification & sublime.CLASS_LINE_START:
+                bol = self.cursor
+            else:
+                bol = self.find_by_class(
+                    self.cursor,
+                    forward=False,
+                    classes=sublime.CLASS_LINE_START
+                )
+            if classification & sublime.CLASS_LINE_END:
+                eol = self.cursor
+            else:
+                eol = self.find_by_class(
+                    self.cursor,
+                    forward=True,
+                    classes=sublime.CLASS_LINE_END
+                )
+            self.erase(bol, eol)
+
+    def handle_csi_P(self, arg):
+        # delete n
+        n = int(arg)
+        end = self.cursor + n
+        self.delete(self.cursor, end)
+
+    def handle_rendition(self, arg):
+        # foreground and background color
+        if not arg:
+            # ESC[m -> default
+            self.scope = None
+            return
+        fg = 'default'
+        bg = 'default'
+        nums = arg.split(';')
+        i = 0
+        while i < len(nums):
+            num = nums[i]
+            if num in ('0', '00'):
+                fg = 'default'
+                bg = 'default'
+            elif num in ('1', '01', '2', '02', '22'):
+                # TODO: handle bold/faint intensity
+                pass
+            elif num.startswith('1') and len(num) == 2:
+                # TODO: handle these
+                pass
+            elif num == '30':
+                fg = 'black'
+            elif num == '31':
+                fg = 'red'
+            elif num == '32':
+                fg = 'green'
+            elif num == '33':
+                fg = 'yellow'
+            elif num == '34':
+                fg = 'blue'
+            elif num == '35':
+                fg = 'cyan'
+            elif num == '36':
+                fg = 'magenta'
+            elif num == '37':
+                fg = 'white'
+            elif num == '38':
+                i += 1
+                selector = nums[i]
+                if selector == '2':
+                    # r, g, b
+                    i += 3
+                    continue
+                elif selector == '5':
+                    # 8-bit
+                    idx = int(nums[i + 1])
+                    if idx < 8:
+                        nums[i + 1] = str(30 + idx)
+                    elif idx < 16:
+                        nums[i + 1] = str(90 + idx - 8)
+                    elif idx >= 254:
+                        nums[i + 1] = '97'  # mostly white
+                    elif idx >= 247:
+                        nums[i + 1] = '37'   # light grey
+                    elif idx >= 240:
+                        nums[i + 1] = '90'   # dark grey
+                    elif idx >= 232:
+                        nums[i + 1] = '30'   # mostly black
+                    else:
+                        assert 16 <= idx <= 231, idx
+                        rg, b = divmod(idx - 16, 6)
+                        r, g = divmod(rg, 6)
+                        r //= 3
+                        g //= 3
+                        b //= 3
+                        x = {
+                            (0, 0, 0): '90',
+                            (0, 0, 1): '94',
+                            (0, 1, 0): '92',
+                            (0, 1, 1): '96',
+                            (1, 0, 0): '91',
+                            (1, 0, 1): '95',
+                            (1, 1, 0): '93',
+                            (1, 1, 1): '37',
+                        }
+                        nums[i + 1] = x[(r, g, b)]
+            elif num == '39':
+                fg = 'default'
+            elif num == '40':
+                bg = 'black'
+            elif num == '41':
+                bg = 'red'
+            elif num == '42':
+                bg = 'green'
+            elif num == '43':
+                bg = 'yellow'
+            elif num == '44':
+                bg = 'blue'
+            elif num == '45':
+                bg = 'cyan'
+            elif num == '46':
+                bg = 'magenta'
+            elif num == '47':
+                bg = 'white'
+            elif num == '48':
+                i += 1
+                selector = nums[i]
+                if selector == '2':
+                    # r, g, b
+                    i += 3
+                elif selector == '5':
+                    # 8-bit
+                    idx = int(nums[i + 1])
+                    if idx < 8:
+                        nums[i + 1] = str(40 + idx)
+                    elif idx < 16:
+                        nums[i + 1] = str(100 + idx - 8)
+                    elif idx >= 254:
+                        nums[i + 1] = '107'  # mostly white
+                    elif idx >= 247:
+                        nums[i + 1] = '47'   # light grey
+                    elif idx >= 240:
+                        nums[i + 1] = '100'   # dark grey
+                    elif idx >= 232:
+                        nums[i + 1] = '40'   # mostly black
+                    else:
+                        assert 16 <= idx <= 231, idx
+                        rg, b = divmod(idx - 16, 6)
+                        r, g = divmod(rg, 6)
+                        r //= 3
+                        g //= 3
+                        b //= 3
+                        x = {
+                            (0, 0, 0): '100',
+                            (0, 0, 1): '104',
+                            (0, 1, 0): '102',
+                            (0, 1, 1): '106',
+                            (1, 0, 0): '101',
+                            (1, 0, 1): '105',
+                            (1, 1, 0): '103',
+                            (1, 1, 1): '47',
+                        }
+                        nums[i + 1] = x[(r, g, b)]
+            elif num == '49':
+                bg = 'default'
+            elif num == '90':
+                fg = 'brightblack'
+            elif num == '91':
+                fg = 'brightred'
+            elif num == '92':
+                fg = 'brightgreen'
+            elif num == '93':
+                fg = 'brightyellow'
+            elif num == '94':
+                fg = 'brightblue'
+            elif num == '95':
+                fg = 'brightcyan'
+            elif num == '96':
+                fg = 'brightmagenta'
+            elif num == '97':
+                fg = 'brightwhite'
+            elif num == '100':
+                bg = 'brightblack'
+            elif num == '101':
+                bg = 'brightred'
+            elif num == '102':
+                bg = 'brightgreen'
+            elif num == '103':
+                bg = 'brightyellow'
+            elif num == '104':
+                bg = 'brightblue'
+            elif num == '105':
+                bg = 'brightcyan'
+            elif num == '106':
+                bg = 'brightmagenta'
+            elif num == '107':
+                bg = 'brightwhite'
+            else:
+                print(
+                    'GidTerm: [WARN] Unhandled SGR code: {} in {}'.format(
+                        num, arg
+                    )
+                )
+            i += 1
+        scope = 'sgr.{}-on-{}'.format(fg, bg)  # type: str|None
+        if scope == 'sgr.default-on-default':
+            scope = None
+        self.scope = scope
+
+    def display_status(self, status, ret_scope, elapsed):
+        # type: (str, str, timedelta) -> None
+        output_end = self.size()
+        col = self.rowcol(output_end)[1]
+        self.cursor = output_end
+        if col != 0:
+            self.write('\n')
+        if status == '0':
+            self.set_scope('sgr.green-on-default')
+        else:
+            self.set_scope('sgr.red-on-default')
+        self.write(status)
+        info = _exit_status_info.get(status)
+        if info:
+            self.set_scope('sgr.yellow-on-default')
+            self.write(info)
+        self.set_scope(ret_scope)
+        self.write('\u23ce')
+        self.set_scope(None)
+        self.write(' {}\n'.format(elapsed))
+
+    def disconnect(self):
+        # type: () -> None
+        if self.shell is not None:
+            self.shell.close()
+            self.shell = None
+        _set_browse_mode(self)
+
+    def send(self, s):
+        # type: (str) -> None
+        if self.shell is None:
+            self.shell = Shell()
+            self.start(50)
+            self.buffered = s
+        elif self.buffered:
+            self.buffered += s
+        else:
+            self.shell.send(s)
+
+    def at_prompt(self):
+        # type: () -> bool
+        if self.in_lines is None:
+            # currently displaying output
+            return False
+        return self.cursor == self.home
+
+    def at_cursor(self):
+        # type: () -> bool
+        cursor = self.cursor
+        for region in self.sel():
+            if region.begin() != cursor or region.end() != cursor:
+                return False
+        return True
+
     def set_time(self):
         # type: () -> datetime
         now = datetime.now(timezone.utc)
@@ -1117,62 +1273,6 @@ class ShellTab(OutputView):
                 # don't show time immediately, to avoid flashing
                 self.set_title(str(timedelta_seconds(elapsed)))
         return now
-
-    def once(self):
-        # type: () -> bool|None
-        if self.shell is not None:
-            if self.shell.ready():
-                s = self.shell.receive()
-                if s:
-                    now = self.set_time()
-                    self.handle_output(s, now)
-                    return True
-            else:
-                self.set_time()
-                return False
-
-        return None
-
-    def loop(self):
-        # type: () -> None
-        try:
-            next = self.once()
-            if next is True:
-                sublime.set_timeout(self.loop, 10)
-            elif next is False:
-                sublime.set_timeout(self.loop, 50)
-            else:
-                assert next is None, next
-                self.disconnect()
-                self.loop_active = False
-        except Exception:
-            self.disconnect()
-            self.loop_active = False
-            raise
-
-
-def _set_browse_mode(view):
-    # type: (sublime.View) -> bool
-    settings = view.settings()
-    follow = settings.get('gidterm_follow')
-    if follow:
-        settings.set('gidterm_follow', False)
-        settings.set('block_caret', False)
-        settings.set('caret_style', 'blink')
-        view.set_status('gidterm_mode', 'Browse mode')
-    return follow
-
-
-def _set_terminal_mode(view):
-    # type: (sublime.View) -> bool
-    settings = view.settings()
-    follow = settings.get('gidterm_follow')
-    if not follow:
-        settings.set('gidterm_follow', True)
-        settings.set('block_caret', True)
-        settings.set('caret_style', 'solid')
-        view.set_status('gidterm_mode', 'Terminal mode')
-    return not follow
 
 
 class GidtermInsertTextCommand(sublime_plugin.TextCommand):
@@ -1192,70 +1292,16 @@ class GidtermEraseTextCommand(sublime_plugin.TextCommand):
         self.view.erase(edit, region)
 
 
-def create_init_file(contents):
-    # type: (str) -> str
-    cachedir = os.path.expanduser('~/.cache/sublime-gidterm/profile')
-    os.makedirs(cachedir, exist_ok=True)
-    with tempfile.NamedTemporaryFile('w', dir=cachedir, delete=False) as f:
-        f.write(contents)
-        f.write('declare -- GIDTERM_CACHE="{}"\n'.format(f.name))
-        return f.name
-
-
-def _get_package_location(winvar):
-    # type: (dict[str, str]) -> str
-    packages = winvar['packages']
-    this_package = os.path.dirname(__file__)
-    assert this_package.startswith(packages)
-    unwanted = os.path.dirname(packages)
-    # add one to remove pathname delimiter /
-    return this_package[len(unwanted) + 1:]
-
-
-def get_initial_profile():
-    # type: () -> str
-    this_package = os.path.dirname(__file__)
-    config = os.path.join(this_package, 'config')
-    return 'declare -- GIDTERM_CONFIG="{}"\n'.format(config) + _initial_profile
-
-
-def create_view(window, pwd, init_script):
-    # type: (sublime.Window, str, str) -> sublime.View
-    winvar = window.extract_variables()
-    package = _get_package_location(winvar)
-    if pwd is None:
-        pwd = winvar.get('folder', os.environ.get('HOME', '/'))
-    view = window.new_file()
-    view.set_line_endings('Unix')
-    view.set_read_only(True)
-    view.set_scratch(True)
-    view.set_syntax_file(os.path.join(package, 'gidterm.sublime-syntax'))
-    settings = view.settings()
-    settings.set(
-        'color_scheme',
-        os.path.join(package, 'gidterm.sublime-color-scheme')
-    )
-    # prevent ST doing work that doesn't help here
-    settings.set('mini_diff', False)
-    settings.set('spell_check', False)
-    # state
-    settings.set('is_gidterm', True)
-    settings.set('gidterm_command_history', [])
-    settings.set('gidterm_pwd', [(0, pwd)])
-    settings.set('current_working_directory', pwd)  # for GidOpen
-    settings.set('gidterm_init_file', create_init_file(init_script))
-    return view
-
-
 class GidtermCommand(sublime_plugin.TextCommand):
     def run(self, edit, pwd=None):
         settings = self.view.settings()
         if settings.get('is_gidterm'):
             # If the current view is a GidTerm, use the same
             # pwd, configuration, and environment
+            display_panel = get_panel(self.view).get_display_panel()
             if pwd is None:
-                pwd = settings.get('gidterm_pwd')[-1][1]
-            init_file = settings.get('gidterm_init_file')
+                pwd = display_panel.getpwd()
+            init_file = display_panel.get_init_file('gidterm_init_file')
             with open(init_file) as f:
                 init_script = f.read()
         else:
@@ -1265,36 +1311,22 @@ class GidtermCommand(sublime_plugin.TextCommand):
                 filename = self.view.file_name()
                 if filename is not None:
                     pwd = os.path.dirname(filename)
-            init_script = get_initial_profile()
+            init_script = None
         window = self.view.window()
-        view = create_view(window, pwd, init_script)
+        view = window.new_file()
         window.focus_view(view)
-        view_id = view.id()
-        gview = ShellTab(view_id)
-        gview.start(100)
-
-
-def get_gidterm_view(view, start=False):
-    # type: (sublime.View, bool) -> ShellTab
-    view_id = view.id()
-    gview = _viewmap.get(view_id)
-    if gview is None:
-        if view.settings().get('is_gidterm'):
-            gview = ShellTab(view_id)
-            if start:
-                gview.start(50)
-        else:
-            raise RuntimeError('not a GidTerm')
-    return gview
+        DisplayPanel(view, pwd, init_script)
 
 
 class GidtermSendCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, characters):
-        view = get_gidterm_view(self.view)
-        view.send(characters)
-        if _set_terminal_mode(view):
-            view.move_cursor()
+        panel = get_panel(self.view)
+        if panel is None:
+            print('No view', self.view.id())
+        else:
+            print('in char', characters)
+            panel.handle_input(characters)
 
 
 _terminal_capability_map = {
@@ -1333,27 +1365,20 @@ _terminal_capability_map = {
 class GidtermSendCapCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, cap, terminal_mode=True):
-        view = get_gidterm_view(self.view)
-        seq = _terminal_capability_map.get(cap)
-        if not seq:
+        characters = _terminal_capability_map.get(cap)
+        if characters is None:
             print(
-                'gidterm: [WARN] unexpected terminal capability: {}'.format(
+                'GidTerm: [WARN] unexpected terminal capability: {}'.format(
                     cap
                 )
             )
+            return
+        panel = get_panel(self.view)
+        if panel is None:
+            print('No view', self.view.id())
         else:
-            if terminal_mode:
-                view.send(seq)
-                if _set_terminal_mode(view):
-                    view.move_cursor()
-            else:
-                _set_browse_mode(view)
-                # Unsetting the selection prevents scrolling, but
-                # disables navigation (PgUp, etc). Set to just before
-                # end to prevent scrolling.
-                view.sel().clear()
-                view.sel().add(view.size() - 1)
-                view.send(seq)
+            print('in char', characters)
+            panel.handle_input(characters)
 
 
 _follow_escape = {
@@ -1413,7 +1438,7 @@ class GidtermEscapeCommand(sublime_plugin.TextCommand):
         view = get_gidterm_view(self.view)
         action = _follow_escape.get(key)
         if action is None:
-            print('gidterm: [WARN] unexpected escape key: {}'.format(key))
+            print('GidTerm: [WARN] unexpected escape key: {}'.format(key))
         else:
             _set_browse_mode(view)
             action(view)
@@ -1425,7 +1450,7 @@ class GidtermFollowCommand(sublime_plugin.TextCommand):
         view = get_gidterm_view(self.view)
         action = _follow_escape.get(key)
         if action is None:
-            print('gidterm: [WARN] unexpected escape key: {}'.format(key))
+            print('GidTerm: [WARN] unexpected escape key: {}'.format(key))
         else:
             if _set_terminal_mode(view):
                 view.move_cursor()
@@ -1531,28 +1556,15 @@ class GidtermSelectCommand(sublime_plugin.TextCommand):
 class GidtermListener(sublime_plugin.ViewEventListener):
 
     @classmethod
-    def is_applicable(view, settings):
-        if settings.get('is_gidterm'):
-            return True
-        return False
+    def is_applicable(cls, settings):
+        return settings.get('is_gidterm', False)
 
     @classmethod
-    def applies_to_primary_view_only(view):
+    def applies_to_primary_view_only(cls):
         return False
 
     def on_close(self):
-        view_id = self.view.id()
-        gview = _viewmap.get(view_id)
-        if gview:
-            del _viewmap[view_id]
+        uncache_panel(self.view)
         init_file = self.view.settings().get('gidterm_init_file')
         if init_file and os.path.exists(init_file):
-            with open(init_file) as f:
-                init_script = f.read()
-            self.view.settings().set('gidterm_init', init_script)
             os.unlink(init_file)
-
-    def on_selection_modified(self):
-        regions = list(self.view.sel())
-        if len(regions) != 1 or not regions[0].empty():
-            _set_browse_mode(self.view)
