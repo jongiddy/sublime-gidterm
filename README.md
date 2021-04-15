@@ -30,27 +30,17 @@ git pull
 `Shift-Ctrl-G` in an existing tab to open a bash shell.
 If the existing tab contains a file, the shell will be in the same directory.
 
-The shell tab has two modes:
+GidTerm shows a prompt panel for running commands and a read-only display window for viewing output.
 
-- *terminal mode* where control keys are sent to the terminal. The cursor up key will show command history and `Ctrl-C` will send a signal that will likely terminate the running command.
-- *browse mode* where control keys perform Sublime commands. The cursor up key will move the cursor up one line and `Ctrl-C` will copy the current selection.
+Typing in either view sends text to the terminal, except for control keys.
 
-In terminal mode, change to browse mode using one of the following:
+When focus is in the prompt panel, control keys will perform terminal actions (e.g. the cursor up key will show command history and `Ctrl-C` will send a signal to terminate the running command).
 
-- Select any text;
-- `Ctrl`-click;
-- `Ctrl-Enter` to run a command but stay at start rather than following output;
-- `Home`, `End`, `PageUp`, `PageDown` (including with `Shift` and `Ctrl` modifiers, except `Ctrl-End`) to perform the usual Sublime Text navigation;
-- `Shift-Ctrl-PageUp` and `Shift-Ctrl-PageDown` to select the previous or next command respectively. This only works when at the input prompt. `Shift-Ctrl-PageDown` when at or after the last command will return to terminal mode.
+When focus is in the display window, control keys will perform Sublime Text actions (e.g. the cursor up key will move the cursor up one line and `Ctrl-C` will copy the current selection). 
 
-In browse mode, change to terminal mode using one of the following:
-
-- `Ctrl-End`;
-- `Shift-Ctrl-PageDown` when at or after the last command;
-- Type any printing character, including `Enter`, `Tab`, `Backspace`, and `Delete`;
-- `Ctrl-V` to insert the clipboard into the command prompt;
-- `Ctrl-Insert` to insert the clipboard into the command prompt with surrounding whitespace removed;
-- `Shift-Insert` to delete the contents of the command prompt and replace with the clipboard with surrounding whitespace removed;
-- `Shift-Delete` to delete the contents of the command prompt;
-
-All of these, except `Ctrl-V`, perform the same action in both modes.
+GidTerm supplies some useful key combinations that work in either view:
+- `Ctrl-Enter` to open and focus in the prompt panel
+- `Ctrl-Shift-Enter` to focus in the display window
+- `Ctrl-Shift-Backspace` to focus in the display window and close the prompt panel
+- `Ctrl-Shift-PageUp` and `Ctrl-Shift-PageDown` to focus in the display window and select the previous or next command respectively
+- `Ctrl-Shift-Insert` to insert the clipboard into the terminal with surrounding whitespace removed. To insert the clipboard without trimming whitespace, use `Ctrl-Shift-V` in the prompt panel or `Ctrl-V` in the display window.

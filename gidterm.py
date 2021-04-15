@@ -229,12 +229,31 @@ def cache_panel(view, panel):
 
 def uncache_panel(view):
     # type: (sublime.View) -> None
-    del panel_cache[view.id()]
+    try:
+        del panel_cache[view.id()]
+    except KeyError:
+        warn('panel not found: {}'.format(panel_cache))
 
 
 def get_panel(view):
-    # type: (sublime.View) -> DisplayPanel|LivePanel|None
-    return panel_cache.get(view.id())
+    # type: (sublime.View) -> DisplayPanel|LivePanel
+    panel = panel_cache.get(view.id())
+    if panel is None:
+        settings = view.settings()
+        if settings.get('is_gidterm_display'):
+            panel = DisplayPanel(view)
+        else:
+            assert settings.get('is_gidterm_live')
+            panel = LivePanel(view)
+        cache_panel(view, panel)
+    return panel
+
+
+def get_display_panel(view):
+    # type: (sublime.View) -> DisplayPanel
+    panel = get_panel(view)
+    assert isinstance(panel, DisplayPanel)
+    return panel
 
 
 class CommandHistory:
@@ -257,9 +276,9 @@ class CommandHistory:
         # type: () -> None
         self.settings.set('gidterm_command_history', self.commands)
 
-    def append(self, regions):
-        # type: (list[sublime.Region]) -> None
-        command = [[r.begin(), r.end()] for r in regions]
+    def append(self, regions, offset):
+        # type: (list[sublime.Region], int) -> None
+        command = [[r.begin() + offset, r.end() + offset] for r in regions]
         self.commands.append(command)
         self.save()
 
@@ -280,8 +299,8 @@ class CommandHistory:
             command = self.commands[index]
             if command[-1][1] <= pos:
                 low = index
-        else:
-            high = index - 1
+            else:
+                high = index - 1
 
         return self.regions(low)
 
@@ -298,8 +317,8 @@ class CommandHistory:
             command = self.commands[index]
             if command[0][0] >= pos:
                 high = index
-        else:
-            low = index + 1
+            else:
+                low = index + 1
 
         return self.regions(low)
 
@@ -575,7 +594,7 @@ class TerminalOutput:
         # (str) -> Iterator[namedtuple]
         if not arg:
             # ESC[m -> default
-            yield TerminalOutput.SelectGraphicRendition('sgr.default-on-default')
+            yield TerminalOutput.SelectGraphicRendition('default', 'default')
             return
         fg = 'default'
         bg = 'default'
@@ -745,61 +764,52 @@ class TerminalOutput:
         yield TerminalOutput.SelectGraphicRendition(fg, bg)
 
 
-class GidTermPanel:
+class DisplayPanel:
 
     def __init__(self, view):
         # type: (sublime.View) -> None
-        winvar = view.window().extract_variables()
-        package = _get_package_location(winvar)
-
-        view.set_read_only(True)
-        view.set_scratch(True)
-        view.set_line_endings('Unix')
-        settings = view.settings()
-        settings.set('is_gidterm', True)
-        settings.set('color_scheme', os.path.join(package, 'gidterm.sublime-color-scheme'))
-        # prevent ST doing work that doesn't help here
-        settings.set('mini_diff', False)
-        settings.set('spell_check', False)
-
-        cache_panel(view, self)  # type: ignore
-
         self.view = view
-        self.winvar = winvar
-
-
-class DisplayPanel(GidTermPanel):
-
-    def __init__(self, view, pwd, init_file_contents):
-        # type: (sublime.View, str, bytes) -> None
-        super().__init__(view)
-        if pwd is None:
-            pwd = self.winvar.get('folder', os.environ.get('HOME', '/'))
-        if init_file_contents is None:
-            init_file_contents = _initial_profile
-
-        init_file = self.create_init_file(init_file_contents)
 
         settings = view.settings()
-        settings.set('is_gidterm_display', True)
-        settings.set('current_working_directory', pwd)
-        settings.set('gidterm_init_file', init_file)
+        self.pwd = settings.get('current_working_directory')
+        self.init_file = settings.get('gidterm_init_file')
 
         self.command_history = CommandHistory(view)
-        self.pwd = pwd
-        self.init_file = init_file
 
-        # State of the forked shell
+        self.focus_in_live = True
+
         self.terminal = None  # type: Terminal|None
         self.terminal_output = None  # type: TerminalOutput|None
-        self.buffered = ''  # type: str
-        self.live_panel = None  # type: LivePanel|None
+        self.buffered = None  # type: str|None
+        # self.terminal = Terminal()  # type: Terminal|None
+        # self.terminal.start(self.pwd, self.init_file)
+        # self.terminal_output = TerminalOutput(self.terminal)
+        # self.buffered = ''
+        # sublime.set_timeout(self.wait_for_prompt, 100)
+
+    def close(self):
+        if self.terminal:
+            self.terminal.stop()
+            self.terminal = None
+        panel_name = self.live_panel_name()
+        window = self.view.window()
+        view = window.find_output_panel(panel_name)
+        if view:
+            uncache_panel(view)
+            window.destroy_output_panel(panel_name)
+        if os.path.exists(self.init_file):
+            os.unlink(self.init_file)
+        uncache_panel(self.view)
 
     def get_display_panel(self):
         # type: () -> DisplayPanel
         return self
 
+    def get_terminal_output(self):
+        return self.terminal_output
+
     def setpwd(self, pwd):
+        # type: (str) -> None
         self.pwd = pwd
         settings = self.view.settings()
         settings.set('current_working_directory', pwd)
@@ -808,18 +818,6 @@ class DisplayPanel(GidTermPanel):
         # type: () -> str
         return self.pwd
 
-    def create_init_file(self, contents):
-        # type: (bytes) -> str
-        cachedir = os.path.expanduser('~/.cache/sublime-gidterm/profile')
-        os.makedirs(cachedir, exist_ok=True)
-        fd, name = tempfile.mkstemp(dir=cachedir)
-        try:
-            contents += b'declare -- GIDTERM_CACHE="' + name.encode(sys.getfilesystemencoding()) + b'"\n'
-            os.write(fd, contents)
-        finally:
-            os.close(fd)
-        return name
-
     def live_panel_name(self):
         # type: () -> str
         view_id = self.view.id()
@@ -827,14 +825,21 @@ class DisplayPanel(GidTermPanel):
 
     def append_text(self, text, scopes):
         # type: (str, dict[str, list[sublime.Region]]) -> None
-        pos = self.view.size()
+        text_begin = self.view.size()
         # `force` to override read_only state
         self.view.run_command('append', {'characters': text, 'force': True, 'scroll_to_end': False})
+        text_end = self.view.size()
         for scope, new_regions in scopes.items():
             regions = self.view.get_regions(scope)
             for new_region in new_regions:
-                begin = new_region.begin() + pos
-                end = new_region.end() + pos
+                # shift region to where text was appended
+                begin = text_begin + new_region.begin()
+                end = text_begin + new_region.end()
+                # trim region to where text was appended
+                if begin >= text_end:
+                    continue
+                if end > text_end:
+                    end = text_end
                 if regions and regions[-1].end() == begin:
                     # merge into previous region
                     prev = regions.pop()
@@ -955,7 +960,7 @@ class DisplayPanel(GidTermPanel):
             self.terminal.start(self.pwd, self.init_file)
             self.terminal_output = TerminalOutput(self.terminal)
             sublime.set_timeout(self.wait_for_prompt, 100)
-        elif self.buffered:
+        elif self.buffered is not None:
             self.buffered += text
         else:
             self.terminal.send(text)
@@ -969,38 +974,89 @@ class DisplayPanel(GidTermPanel):
                 # prompt about to be emitted
                 if self.buffered:
                     self.terminal.send(self.buffered)
-                    self.buffered = ''
-                panel_name = self.live_panel_name()
-                window = self.view.window()
-                LivePanel(window, panel_name, self, self.terminal_output)
+                    self.buffered = None
+                self.reset_live_panel()
                 break
             else:
                 warn('unexpected token: {}'.format(t))
         else:
             # Terminal has closed connection
-            self.terminal.close()
+            self.terminal.stop()
             self.terminal = None
             self.terminal_output = None
             warn('terminal closed')
 
-    def focus_live(self):
+    def reset_live_panel(self):
         panel_name = self.live_panel_name()
-        self.view.window().run_command('show_panel', {'panel': 'output.{}'.format(panel_name)})
+        window = self.view.window()
+        view = window.find_output_panel(panel_name)
+        if view is not None:
+            uncache_panel(view)
+            window.destroy_output_panel(panel_name)
+        view = window.create_output_panel(panel_name)
+        view.set_read_only(True)
+        view.set_scratch(True)
+        view.set_line_endings('Unix')
+
+        settings = view.settings()
+        settings.set('is_gidterm', True)
+        settings.set('is_gidterm_live', True)
+        settings.set('gidterm_display_panel', self.view.id())
+        settings.set('color_scheme', self.view.settings().get('color_scheme'))
+        settings.set('block_caret', True)
+        settings.set('caret_style', 'solid')
+        # prevent ST doing work that doesn't help here
+        settings.set('mini_diff', False)
+        settings.set('spell_check', False)
+
+        cache_panel(view, LivePanel(view))
+        window.run_command('show_panel', {'panel': 'output.{}'.format(panel_name)})
+        if self.focus_in_live:
+            window.focus_view(view)
+
+    def focus(self):
+        self.focus_in_live = False
+        window = self.view.window()
+        n = window.num_groups()
+        for group in range(n):
+            if self.view in window.views_in_group(group):
+                window.focus_group(group)
+                window.focus_view(self.view)
+                break
+
+    def focus_live(self):
+        self.focus_in_live = True
+        panel_name = self.live_panel_name()
+        window = self.view.window()
+        view = window.find_output_panel(panel_name)
+        window.run_command('show_panel', {'panel': 'output.{}'.format(panel_name)})
+        window.focus_view(view)
 
     def hide_live(self):
+        self.focus_in_live = False
         panel_name = self.live_panel_name()
         view = self.view.window().find_output_panel(panel_name)
         view.run_command('hide_panel')
 
-    def command_completed(self, view, command_range, terminal_closed=False):
-        # type: (sublime.View, list[sublime.Region], bool) -> None
-        if terminal_closed:
+    def add_output(self, text, scopes, command_range):
+        # type: (str, dict[str, list[sublime.Region]], list[sublime.Region]|None) -> None
+        if command_range:
+            self.command_history.append(command_range, self.view.size())
+            # self.reset_live_panel()
+        self.append_text(text, scopes)
+
+    def terminal_closed(self):
+        # type: () -> None
+        if self.terminal is not None:
+            self.terminal.stop()
             self.terminal = None
             self.terminal_output = None
-        text = view.substr(0, view.size())
-        scopes = get_scopes(view)
-        self.append_text(text, scopes)
-        self.command_history.append(command_range)
+        panel_name = self.live_panel_name()
+        window = sublime.active_window()
+        view = window.find_output_panel(panel_name)
+        if view is not None:
+            uncache_panel(view)
+            window.destroy_output_panel(panel_name)
 
     def next_command(self):
         # type: () -> None
@@ -1078,29 +1134,13 @@ def get_scopes(view):
     return scopes
 
 
-class LivePanel(GidTermPanel):
+class LivePanel:
 
-    def __init__(self, window, panel_name, display_panel, terminal_output):
-        # type: (sublime.Window, str, DisplayPanel, TerminalOutput) -> None
-        view = window.find_output_panel(panel_name)
-        if view is not None:
-            window.destroy_output_panel(panel_name)
-        view = window.create_output_panel(panel_name)
-
-        super().__init__(view)
-
+    def __init__(self, view):
+        # type: (sublime.View) -> None
+        self.view = view
         settings = view.settings()
-        settings.set('is_gidterm_live', True)
-
-        self.panel_name = panel_name
-        self.display_panel = display_panel
-        self.terminal_output = terminal_output
-
-        # Control of the panel
-        # 0 = show on first token after prompt
-        # 1 = show on next token
-        # 2 = do not show
-        self.panel_control = 0
+        self.display_panel = get_display_panel(sublime.View(settings.get('gidterm_display_panel')))
 
         # State of the output stream
         self.cursor = view.size()  # type: int
@@ -1113,6 +1153,7 @@ class LivePanel(GidTermPanel):
         self.command = []  # type: list[str]
         self.out_start_time = None  # type: datetime|None
         self.update_running = False
+        self.pushed = 0
 
         sublime.set_timeout(self.handle_output, 0)
 
@@ -1121,7 +1162,7 @@ class LivePanel(GidTermPanel):
         return self.display_panel
 
     def focus_display(self):
-        self.view.window().focus_view(self.display_panel.view)
+        self.display_panel.focus()
 
     def hide_live(self):
         self.view.run_command('hide_panel')
@@ -1133,37 +1174,42 @@ class LivePanel(GidTermPanel):
         # type: (str) -> None
         self.display_panel.handle_input(text)
 
+    def push(self, end):
+        # type: (int) -> None
+        self.delete(0, self.pushed)
+        end -= self.pushed
+        self.pushed = 0
+        if end > 0:
+            text = self.view.substr(sublime.Region(0, end))
+            scopes = get_scopes(self.view)
+            self.display_panel.add_output(text, scopes, self.command_range)
+            self.pushed = end
+
     def handle_output(self):
         view = self.view
+        filename = '/tmp/view-{}'.format(view.id())
         count = 0
-        for t in self.terminal_output:
+        for t in self.display_panel.get_terminal_output():
             if isinstance(t, TerminalOutput.NotReady):
                 sublime.set_timeout(self.handle_output, 100)
                 break
-            count += 1
-            if count > 20:
-                # give other events a chance to run
-                sublime.set_timeout(self.handle_output, 0)
-                break
-            if self.panel_control == 1:
-                view.window().run_command('show_panel', {'panel': 'output.{}'.format(self.panel_name)})
-                self.panel_control = 2
+            with open(filename, 'a') as f:
+                f.write(str(t))
+                f.write('\n')
             if isinstance(t, TerminalOutput.Prompt1Starts):
-                pass
+                assert self.command_start is None
+                assert self.cursor == view.size(), (self.cursor, view.size())
             elif isinstance(t, TerminalOutput.Prompt1Stops):
                 assert self.cursor == view.size()
-                assert self.command_start is None
-                assert self.command_range is None
-                self.command_start = self.cursor
+                self.push(self.cursor)
+                self.command_start = self.cursor - self.pushed
                 self.command_range = []
                 self.scope = None
-                self.panel_control = 1
             elif isinstance(t, TerminalOutput.Prompt2Starts):
                 assert self.cursor == view.size()
                 end = self.cursor - 1
-                assert self.substr(end) == '\n'
-                assert self.command_range is not None
-                self.command_range.append(sublime.Region(self.command_start, end))
+                assert view.substr(end) == '\n'
+                self.command_range.append(sublime.Region(self.command_start, end - self.pushed))
                 self.command_start = None
                 self.scope = 'sgr.magenta-on-default'
             elif isinstance(t, TerminalOutput.Prompt2Stops):
@@ -1174,15 +1220,22 @@ class LivePanel(GidTermPanel):
             elif isinstance(t, TerminalOutput.OutputStarts):
                 assert self.cursor == view.size()
                 end = self.cursor - 1
-                assert self.substr(end) == '\n'
-                assert self.command_range is not None
-                self.command_range.append(sublime.Region(self.command_start, end))
+                assert view.substr(end) == '\n'
+                self.command_range.append(sublime.Region(self.command_start, end - self.pushed))
                 self.command_start = None
-                command = '\n'.join(self.substr(region) for region in self.command_range)
-                words = shlex.split(command.strip())
+                self.push(self.cursor)
+                command = '\n'.join(view.substr(region) for region in self.command_range)
+                try:
+                    words = shlex.split(command.strip())
+                except ValueError as e:
+                    # after a PS2 prompt, this indicates the start of a shell interaction
+                    # TODO: handle this properly
+                    warn(str(e))
+                    words = ['shell']
                 if '/' in words[0]:
                     words[0] = words[0].rsplit('/', 1)[-1]
                 self.command = words
+                self.command_range = None
                 self.out_start_time = datetime.now(timezone.utc)
                 self.home_row, col = view.rowcol(self.cursor)
                 assert col == 0, col
@@ -1191,18 +1244,22 @@ class LivePanel(GidTermPanel):
                     sublime.set_timeout(self.update_elapsed, 1000)
                     self.update_running = True
             elif isinstance(t, TerminalOutput.OutputStops):
-                status = t.status
-                if t.pwd != self.display_panel.getpwd():
-                    self.display_panel.setpwd(t.pwd)
-                    # For `cd` avoid duplicating the name in the title to show more
-                    # of the path. There's an implicit `status == '0'` here, since
-                    # the directory doesn't change if the command fails.
-                    if self.command and self.command[0] == 'cd':
-                        self.command.clear()
-                        status = ''
-                self.display_status(status)
-                self.display_panel.command_completed(self.view, self.command_range)
-                break
+                if self.command_start is None:
+                    # end of an executed command
+                    status = t.status
+                    if t.pwd != self.display_panel.getpwd():
+                        self.display_panel.setpwd(t.pwd)
+                        # For `cd` avoid duplicating the name in the title to show more
+                        # of the path. There's an implicit `status == '0'` here, since
+                        # the directory doesn't change if the command fails.
+                        if self.command and self.command[0] in ('cd', 'popd', 'pushd'):
+                            self.command = []
+                            status = ''
+                    self.display_status(status)
+                    self.push(self.cursor)
+                else:
+                    # end of a shell interaction, e.g. Display all possibilities? (y or n)
+                    self.command_start = None
             elif isinstance(t, TerminalOutput.Text):
                 self.overwrite(t.text)
             elif isinstance(t, TerminalOutput.CursorUp):
@@ -1313,11 +1370,17 @@ class LivePanel(GidTermPanel):
                 self.scope = scope
             else:
                 warn('unexpected token: {}'.format(t))
+            count += 1
+            if count > 20:
+                # give other events a chance to run
+                sublime.set_timeout(self.handle_output, 0)
+                break
         else:
             # Terminal has closed connection
             warn('terminal closed')
             self.display_status('DISCONNECTED')
-            self.display_panel.command_completed(self.view, self.command_range, terminal_closed=True)
+            self.push(view.size())
+            self.display_panel.terminal_closed()
         view.run_command('gidterm_cursor', {'position': self.cursor})
 
     def update_elapsed(self):
@@ -1327,6 +1390,14 @@ class LivePanel(GidTermPanel):
             now = datetime.now(timezone.utc)
             elapsed = (now - self.out_start_time).total_seconds()
             self.set_title(str(timedelta_seconds(elapsed)))
+            # If output has scrolled off the top of the terminal, then push
+            # it to the display window.
+            new_home_row = self.view.rowcol(self.view.size())[0] - terminal_rows + 1
+            if new_home_row > self.home_row:
+                self.home_row = new_home_row
+            home = self.view.text_point(self.home_row, 0)
+            if home > self.pushed:
+                self.push(home)
             sublime.set_timeout(self.update_elapsed, 1000)
 
     def display_status(self, status):
@@ -1369,7 +1440,7 @@ class LivePanel(GidTermPanel):
             self.append_text(' {}\n'.format(elapsed))
             self.out_start_time = None
             self.set_title(status)
-        self.command.clear()
+        self.command = []
 
     def _insert(self, view, start, text):
         # type: (sublime.View, int, str) -> int
@@ -1413,9 +1484,8 @@ class LivePanel(GidTermPanel):
         end = start + len(text)
         view.run_command('append', {'characters': text, 'force': True, 'scroll_to_end': True})
         if end != view.size():
-            warn('cursor not at end after writing {!r}'.format(text))
+            warn('cursor not at end after writing {!r} {} {}'.format(text, end, view.size()))
             end = view.size()
-
         if self.scope:
             regions = view.get_regions(self.scope)
             if regions and regions[-1].end() == start:
@@ -1433,7 +1503,7 @@ class LivePanel(GidTermPanel):
         view = self.view
         start = self.cursor
         if start == view.size():
-            self.append_text(start, text)
+            self.append_text(text)
         else:
             end = add_text(view, start, text)
 
@@ -1475,8 +1545,9 @@ class LivePanel(GidTermPanel):
     def delete(self, begin, end):
         # type: (int, int) -> None
         # Delete the region, shifting any later characters into the space.
-        view = self.view
         if begin < end:
+            view = self.view
+            home = view.text_point(self.home_row, 0)
             view.set_read_only(False)
             view.run_command('gidterm_erase_text', {'begin': begin, 'end': end})
             view.set_read_only(True)
@@ -1484,33 +1555,72 @@ class LivePanel(GidTermPanel):
                 self.cursor -= (end - begin)
             elif self.cursor > begin:
                 self.cursor = begin
+            if home > end:
+                home -= (end - begin)
+            elif home > begin:
+                home = begin
+            self.home_row, _ = view.rowcol(home)
+
+
+def create_init_file(contents):
+    # type: (bytes) -> str
+    cachedir = os.path.expanduser('~/.cache/sublime-gidterm/profile')
+    os.makedirs(cachedir, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=cachedir)
+    try:
+        contents += b'declare -- GIDTERM_CACHE="' + name.encode(sys.getfilesystemencoding()) + b'"\n'
+        os.write(fd, contents)
+    finally:
+        os.close(fd)
+    return name
 
 
 class GidtermCommand(sublime_plugin.TextCommand):
     def run(self, edit, pwd=None):
-        view = self.view
         init_script = None
-        if view.settings().get('is_gidterm'):
+        view = self.view
+        settings = view.settings()
+        if settings.get('is_gidterm'):
             # If the current view is a GidTerm, use the same
             # pwd, configuration, and environment
-            panel = get_panel(self.view)
-            if panel is not None:
-                display_panel = get_panel(self.view).get_display_panel()
-                if pwd is None:
-                    pwd = display_panel.getpwd()
-                init_file = display_panel.get_init_file('gidterm_init_file')
-                with open(init_file, 'rb') as f:
-                    init_script = f.read()
-        elif pwd is None:
+            if pwd is None:
+                pwd = settings.get('current_working_directory')
+            init_file = settings.get('gidterm_init_file')
+            with open(init_file, 'rb') as f:
+                init_script = f.read()
+        if pwd is None:
             # If the current view has a filename, use the same
             # pwd. Use the initial configuration and environment.
             filename = view.file_name()
             if filename is not None:
                 pwd = os.path.dirname(filename)
+        if init_script is None:
+            init_script = _initial_profile
+
         window = view.window()
+        winvar = window.extract_variables()
+        if pwd is None:
+            pwd = winvar.get('folder', os.environ.get('HOME', '/'))
+
+        package = _get_package_location(winvar)
+
         view = window.new_file()
+        view.set_read_only(True)
+        view.set_scratch(True)
+        view.set_line_endings('Unix')
+
+        settings = view.settings()
+        settings.set('is_gidterm', True)
+        settings.set('is_gidterm_display', True)
+        settings.set('current_working_directory', pwd)
+        settings.set('gidterm_init_file', create_init_file(init_script))
+        settings.set('color_scheme', os.path.join(package, 'gidterm.sublime-color-scheme'))
+        # prevent ST doing work that doesn't help here
+        settings.set('mini_diff', False)
+        settings.set('spell_check', False)
+
+        cache_panel(view, DisplayPanel(view))
         window.focus_view(view)
-        DisplayPanel(view, pwd, init_script)
 
 
 class GidtermInsertTextCommand(sublime_plugin.TextCommand):
@@ -1544,40 +1654,24 @@ class GidtermCursorCommand(sublime_plugin.TextCommand):
 class GidtermFocusDisplay(sublime_plugin.TextCommand):
 
     def run(self, edit):
-        panel = get_panel(self.view)
-        if panel is None:
-            warn('No view {}'.format(self.view.id()))
-        else:
-            panel.focus_display()
+        get_panel(self.view).focus_display()
 
 class GidtermFocusLive(sublime_plugin.TextCommand):
 
     def run(self, edit):
-        panel = get_panel(self.view)
-        if panel is None:
-            warn('No view {}'.format(self.view.id()))
-        else:
-            panel.focus_live()
+        get_panel(self.view).focus_live()
 
 
 class GidtermHideLive(sublime_plugin.TextCommand):
 
     def run(self, edit):
-        panel = get_panel(self.view)
-        if panel is None:
-            warn('No view {}'.format(self.view.id()))
-        else:
-            panel.hide_live()
+        get_panel(self.view).hide_live()
 
 
 class GidtermSendCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, characters):
-        panel = get_panel(self.view)
-        if panel is None:
-            warn('No view {}'.format(self.view.id()))
-        else:
-            panel.handle_input(characters)
+        get_panel(self.view).handle_input(characters)
 
 
 _terminal_capability_map = {
@@ -1620,51 +1714,17 @@ class GidtermCapabilityCommand(sublime_plugin.TextCommand):
         if characters is None:
             warn('unexpected terminal capability: {}'.format(cap))
             return
-        panel = get_panel(self.view)
-        if panel is None:
-            warn('No view {}'.format(self.view.id()))
-        else:
-            panel.handle_input(characters)
+        get_panel(self.view).handle_input(characters)
 
 
 class GidtermInsertCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, strip):
         panel = get_panel(self.view)
-        if panel is None:
-            warn('No view {}'.format(self.view.id()))
-        else:
-            buf = sublime.get_clipboard()
-            if strip:
-                buf = buf.strip()
-            panel.handle_input(buf)
-
-
-class GidtermReplaceCommand(sublime_plugin.TextCommand):
-
-    def run(self, edit):
-        view = self.view
-        panel = get_panel(view)
-        if panel is None:
-            warn('No view {}'.format(view.id()))
-        else:
-            buf = sublime.get_clipboard().strip()
-            if view.command_range is not None:
-                buf = '\b' * (view.size() - view.home) + buf
-            panel.handle_input(buf)
-
-
-class GidtermDeleteCommand(sublime_plugin.TextCommand):
-
-    def run(self, edit):
-        view = self.view
-        panel = get_panel(view)
-        if panel is None:
-            warn('No view {}'.format(view.id()))
-        else:
-            if view.command_range is not None:
-                buf = '\b' * (view.size() - view.home)
-            panel.handle_input(buf)
+        buf = sublime.get_clipboard()
+        if strip:
+            buf = buf.strip()
+        panel.handle_input(buf)
 
 
 class GidtermSelectCommand(sublime_plugin.TextCommand):
@@ -1672,28 +1732,23 @@ class GidtermSelectCommand(sublime_plugin.TextCommand):
     def run(self, edit, forward):
         view = self.view
         panel = get_panel(view)
-        if panel is None:
-            warn('No view {}'.format(view.id()))
+        display_panel = panel.get_display_panel()
+        display_panel.focus()
+        if forward:
+            display_panel.next_command()
         else:
-            display_panel = panel.get_display_panel()
-            if forward:
-                display_panel.next_command()
-            else:
-                display_panel.prev_command()
+            display_panel.prev_command()
 
 
 class GidtermListener(sublime_plugin.ViewEventListener):
 
     @classmethod
     def is_applicable(cls, settings):
-        return settings.get('is_gidterm', False)
+        return settings.get('is_gidterm_display', False)
 
     @classmethod
     def applies_to_primary_view_only(cls):
         return False
 
-    def on_close(self):
-        uncache_panel(self.view)
-        init_file = self.view.settings().get('gidterm_init_file')
-        if init_file and os.path.exists(init_file):
-            os.unlink(init_file)
+    def on_pre_close(self):
+        get_panel(self.view).close()
