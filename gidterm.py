@@ -1276,7 +1276,6 @@ class LivePanel:
                                 self.command = []
                                 status = ''
                         self.display_status(status)
-                        self.push(self.cursor)
                     else:
                         # end of a shell interaction, e.g. Display all possibilities? (y or n)
                         self.command_start = None
