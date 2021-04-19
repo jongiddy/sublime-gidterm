@@ -8,7 +8,6 @@ import re
 from select import select
 import shlex
 import signal
-import sys
 import tempfile
 import traceback
 
@@ -21,7 +20,7 @@ config_dir = os.path.join(this_package, 'config')
 terminal_rows = 24
 terminal_cols = 80
 
-_initial_profile = rb'''
+_initial_profile = r'''
 # Read the standard profile, to give a familiar environment.  The profile can
 # detect that it is in GidTerm using the `TERM_PROGRAM` environment variable.
 export TERM_PROGRAM=Sublime-GidTerm
@@ -59,8 +58,8 @@ export TERM=ansi
 # the width COLUMNS.  Prevent bash from resetting these variables.
 #
 shopt -u checkwinsize
-export COLUMNS=''' + str(terminal_cols).encode('ascii') + rb'''
-export LINES=''' + str(terminal_rows).encode('ascii') + rb'''
+export COLUMNS=%d
+export LINES=%d
 
 # Avoid paging by using `cat` as the default pager.  This is generally nicer
 # because you can scroll and search using Sublime Text.  It's not so great for
@@ -74,9 +73,9 @@ export PAGER=cat
 export HISTIGNORE=${HISTIGNORE:+${HISTIGNORE}:}'*# [@gidterm@]'
 
 # Specific configuration to make applications work well with GidTerm
-GIDTERM_CONFIG="''' + config_dir.encode(sys.getfilesystemencoding()) + rb'''"
+GIDTERM_CONFIG="%s"
 export RIPGREP_CONFIG_PATH=${GIDTERM_CONFIG}/ripgrep
-'''
+''' % (terminal_cols, terminal_rows, config_dir)
 
 
 _exit_status_info = {}  # type: dict[str, str]
@@ -770,9 +769,9 @@ class DisplayPanel:
         self.view = view
         settings = view.settings()
         init_file = settings.get('gidterm_init_file')
-        if not os.path.exists(init_file):
-            contents = settings.get('gidterm_init_script')
-            init_file = create_init_file(contents.encode('utf-8'))
+        if init_file is None or not os.path.exists(init_file):
+            contents = settings.get('gidterm_init_script', _initial_profile)
+            init_file = create_init_file(contents)
             settings.set('gidterm_init_file', init_file)
         self.init_file = init_file
         self._live_panel_name = 'gidterm-{}'.format(view.id())
@@ -1587,13 +1586,13 @@ class LivePanel:
 
 
 def create_init_file(contents):
-    # type: (bytes) -> str
+    # type: (str) -> str
     cachedir = os.path.expanduser('~/.cache/sublime-gidterm/profile')
     os.makedirs(cachedir, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=cachedir)
     try:
-        contents += b'declare -- GIDTERM_CACHE="' + name.encode(sys.getfilesystemencoding()) + b'"\n'
-        os.write(fd, contents)
+        contents += 'declare -- GIDTERM_CACHE="%s"\n' % name
+        os.write(fd, contents.encode('utf-8'))
     finally:
         os.close(fd)
     return name
@@ -1610,7 +1609,7 @@ class GidtermCommand(sublime_plugin.TextCommand):
             if pwd is None:
                 pwd = settings.get('current_working_directory')
             init_file = settings.get('gidterm_init_file')
-            with open(init_file, 'rb') as f:
+            with open(init_file, encoding='utf-8') as f:
                 init_script = f.read()
         if pwd is None:
             # If the current view has a filename, use the same
@@ -1643,7 +1642,7 @@ class GidtermCommand(sublime_plugin.TextCommand):
         settings.set('is_gidterm', True)
         settings.set('is_gidterm_display', True)
         settings.set('current_working_directory', pwd)
-        settings.set('gidterm_init_script', init_script.decode('utf-8'))
+        settings.set('gidterm_init_script', init_script)
         settings.set('gidterm_init_file', create_init_file(init_script))
 
         display_panel = DisplayPanel(display_view)
