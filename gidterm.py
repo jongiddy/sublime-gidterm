@@ -62,11 +62,9 @@ export COLUMNS=%d
 export LINES=%d
 
 # Avoid paging by using `cat` as the default pager.  This is generally nicer
-# because you can scroll and search using Sublime Text.  It's not so great for
-# `git log` where you typically only want the first page or two.  To fix this,
-# set the Git `pager.log` config variable.  A good configuration for Git is:
-#    core.editor=/usr/bin/subl --wait
-#    pager.log=/usr/bin/less --quit-if-one-screen
+# because you can scroll and search using Sublime Text.  For situations where
+# the pager is typically used to see the first entries, use command options
+# like `git log -n 5` or pipe to `head`.
 export PAGER=cat
 
 # Don't add control commands to the history
