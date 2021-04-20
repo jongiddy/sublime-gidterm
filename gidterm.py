@@ -1266,17 +1266,21 @@ class LivePanel:
                     if self.command_start is None:
                         # end of an executed command
                         status = t.status
+                        self.display_status(status)
                         if t.pwd != self.pwd:
                             self.setpwd(t.pwd)
                             # For `cd` avoid duplicating the name in the title to show more
                             # of the path. There's an implicit `status == '0'` here, since
                             # the directory doesn't change if the command fails.
                             if self.command and self.command[0] in ('cd', 'popd', 'pushd'):
-                                self.command = []
+                                self.command.clear()
                                 status = ''
-                        self.display_status(status)
+                        self.set_title(status)
+                        self.command = []
                     else:
-                        # end of a shell interaction, e.g. Display all possibilities? (y or n)
+                        # Pressing Enter without a command or end of a shell
+                        # interaction, e.g. Display all possibilities? (y or n)
+                        self.set_title()
                         self.command_start = None
                 elif isinstance(t, TerminalOutput.Text):
                     self.overwrite(t.text)
@@ -1425,45 +1429,40 @@ class LivePanel:
 
     def display_status(self, status):
         # type: (str) -> None
-        if self.out_start_time is None:
-            # generally, pressing Enter at an empty command.
-            self.set_title()
+        # finished displaying output of command
+        view = self.view
+        output_end = view.size()
+        col = view.rowcol(output_end)[1]
+        if self.cursor == output_end:
+            if col == 0:
+                # cursor at end, with final newline
+                ret_scope = 'sgr.green-on-default'
+            else:
+                # cursor at end, but no final newline
+                ret_scope = 'sgr.yellow-on-default'
         else:
-            # finished displaying output of command
-            view = self.view
-            output_end = view.size()
-            col = view.rowcol(output_end)[1]
-            if self.cursor == output_end:
-                if col == 0:
-                    # cursor at end, with final newline
-                    ret_scope = 'sgr.green-on-default'
-                else:
-                    # cursor at end, but no final newline
-                    ret_scope = 'sgr.yellow-on-default'
-            else:
-                # cursor not at end
-                ret_scope = 'sgr.red-on-default'
-            if col != 0:
-                self.append_text('\n')
-            if status == '0':
-                self.scope = 'sgr.green-on-default'
-            else:
-                self.scope = 'sgr.red-on-default'
-            self.append_text(status)
-            info = _exit_status_info.get(status)
-            if info:
-                self.scope = 'sgr.yellow-on-default'
-                self.append_text(info)
-            self.scope = ret_scope
-            self.append_text('\u23ce')
-            self.scope = ''
-            elapsed = timedelta_seconds(
-                (datetime.now(timezone.utc) - self.out_start_time).total_seconds()
-            )
+            # cursor not at end
+            ret_scope = 'sgr.red-on-default'
+        if col != 0:
+            self.append_text('\n')
+        if status == '0':
+            self.scope = 'sgr.green-on-default'
+        else:
+            self.scope = 'sgr.red-on-default'
+        self.append_text(status)
+        info = _exit_status_info.get(status)
+        if info:
+            self.scope = 'sgr.yellow-on-default'
+            self.append_text(info)
+        self.scope = ret_scope
+        self.append_text('\u23ce')
+        self.scope = ''
+        if self.out_start_time is None:
+            self.append_text('\n')
+        else:
+            elapsed = timedelta_seconds((datetime.now(timezone.utc) - self.out_start_time).total_seconds())
             self.append_text(' {}\n'.format(elapsed))
-            self.out_start_time = None
-            self.set_title(status)
-        self.command = []
+        self.out_start_time = None
 
     def _insert(self, view, start, text):
         # type: (sublime.View, int, str) -> int
