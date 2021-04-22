@@ -778,13 +778,16 @@ class DisplayPanel:
 
         self.focus_in_live = True
 
+        self.set_tab_label('gidterm starting\u2026')
+
         self.live_panel = self.create_live_panel()
 
     def live_panel_name(self):
         # type: () -> str
         return self._live_panel_name
 
-    def create_live_panel(self):
+    def reset_live_view(self):
+        # type: () -> sublime.View
         panel_name = self.live_panel_name()
         view = self.view
         window = view.window()
@@ -810,6 +813,11 @@ class DisplayPanel:
         settings.set('gidterm_display_view', self.view.id())
         settings.set('current_working_directory', view.settings().get('current_working_directory'))
         settings.set('gidterm_init_file', self.init_file)
+
+        return live_view
+
+    def create_live_panel(self):
+        live_view = self.reset_live_view()
         live_panel = LivePanel(live_view, self)
         cache_panel(live_view, live_panel)
         return live_panel
@@ -1023,7 +1031,7 @@ class LivePanel:
         # Things that get set during command execution
         self.command_start = None  # type: int|None
         self.command_range = None  # type: list[sublime.Region]|None
-        self.command = []  # type: list[str]
+        self.command_words = []  # type: list[str]
         self.out_start_time = None  # type: datetime|None
         self.update_running = False
 
@@ -1031,6 +1039,7 @@ class LivePanel:
         self.terminal.start(self.pwd, self.init_file)
         self.terminal_output = TerminalOutput(self.terminal)
         self.buffered = ''
+
         sublime.set_timeout(self.wait_for_prompt, 100)
 
     def close(self):
@@ -1058,14 +1067,15 @@ class LivePanel:
             if size < 1:
                 label = extra
             else:
-                label = '{}\ufe19{}'.format(self.make_label(size, self.command), extra)
+                label = '{}\ufe19{}'.format(self.make_label(size), extra)
         else:
-            label = self.make_label(TITLE_LENGTH, self.command)
+            label = self.make_label(TITLE_LENGTH)
         self.display_panel.set_tab_label(label)
 
-    def make_label(self, size, command):
+    def make_label(self, size):
         # type: (int, list[str]) -> str
         pwd = self.pwd
+        command_words = self.command_words
         if size < 3:
             if size == 0:
                 return ''
@@ -1076,9 +1086,9 @@ class LivePanel:
             return ELLIPSIS + PROMPT
 
         size -= 1  # for PROMPT
-        if command:
-            arg0 = command[0]
-            if len(command) == 1:
+        if command_words:
+            arg0 = command_words[0]
+            if len(command_words) == 1:
                 if len(arg0) <= size - 1:
                     # we can fit '> arg0'
                     right = ' ' + arg0
@@ -1102,9 +1112,9 @@ class LivePanel:
             short = pwd
         path_len = min(len(pwd), len(short))
         right_avail = size - path_len
-        if len(command) > 1 and right_avail > len(right):
+        if len(command_words) > 1 and right_avail > len(right):
             # we have space to expand the args
-            full = ' '.join(command)
+            full = ' '.join(command_words)
             if len(full) < right_avail:
                 right = ' ' + full
             else:
@@ -1193,6 +1203,7 @@ class LivePanel:
                     if self.buffered:
                         self.terminal.send(self.buffered)
                         self.buffered = None
+                    self.set_title()
                     sublime.set_timeout(self.handle_output, 0)
                     break
                 else:
@@ -1242,6 +1253,14 @@ class LivePanel:
                     self.command_start = None
                     self.push(self.cursor)
                     command = '\n'.join(view.substr(region) for region in self.command_range)
+                    # Close the panel and re-open
+                    view = self.view = self.display_panel.reset_live_view()
+                    cache_panel(view, self)
+                    self.display_panel.show_live()
+                    # Re-add the command without prompts. Note that it has been pushed.
+                    self.append_text(command + '\n')
+                    self.cursor = self.pushed = view.size()
+                    view.add_regions('command', [sublime.Region(0, self.cursor)], 'sgr.default-on-yellow', flags=0)
                     try:
                         words = shlex.split(command.strip())
                     except ValueError as e:
@@ -1251,7 +1270,7 @@ class LivePanel:
                         words = ['shell']
                     if '/' in words[0]:
                         words[0] = words[0].rsplit('/', 1)[-1]
-                    self.command = words
+                    self.command_words = words
                     self.command_range = None
                     self.out_start_time = datetime.now(timezone.utc)
                     self.home_row, col = view.rowcol(self.cursor)
@@ -1270,11 +1289,11 @@ class LivePanel:
                             # For `cd` avoid duplicating the name in the title to show more
                             # of the path. There's an implicit `status == '0'` here, since
                             # the directory doesn't change if the command fails.
-                            if self.command and self.command[0] in ('cd', 'popd', 'pushd'):
-                                self.command.clear()
+                            if self.command_words and self.command_words[0] in ('cd', 'popd', 'pushd'):
+                                self.command_words.clear()
                                 status = ''
                         self.set_title(status)
-                        self.command = []
+                        self.command_words = []
                     else:
                         # Pressing Enter without a command or end of a shell
                         # interaction, e.g. Display all possibilities? (y or n)
