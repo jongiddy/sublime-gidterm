@@ -780,53 +780,19 @@ class DisplayPanel:
 
         self.set_tab_label('gidterm starting\u2026')
 
-        self.live_panel = self.create_live_panel()
+        self.live_panel = LivePanel(
+            self,
+            self.live_panel_name(),
+            self.view.settings().get('current_working_directory'),
+            self.init_file,
+        )
+
+    def get_color_scheme(self):
+        return self.view.settings().get('color_scheme')
 
     def live_panel_name(self):
         # type: () -> str
         return self._live_panel_name
-
-    def reset_live_view(self):
-        # type: () -> sublime.View
-        panel_name = self.live_panel_name()
-        view = self.view
-        window = view.window()
-        live_view = window.find_output_panel(panel_name)
-        if live_view is not None:
-            uncache_panel(live_view)
-            window.destroy_output_panel(panel_name)
-        live_view = window.create_output_panel(panel_name)
-        live_view.set_read_only(True)
-        live_view.set_scratch(True)
-        live_view.set_line_endings('Unix')
-
-        settings = live_view.settings()
-        settings.set('color_scheme', view.settings().get('color_scheme'))
-        settings.set('block_caret', True)
-        settings.set('caret_style', 'solid')
-        # prevent ST doing work that doesn't help here
-        settings.set('mini_diff', False)
-        settings.set('spell_check', False)
-
-        settings.set('is_gidterm', True)
-        settings.set('is_gidterm_live', True)
-        settings.set('gidterm_display_view', self.view.id())
-        settings.set('current_working_directory', view.settings().get('current_working_directory'))
-        settings.set('gidterm_init_file', self.init_file)
-
-        return live_view
-
-    def create_live_panel(self):
-        live_view = self.reset_live_view()
-        live_panel = LivePanel(live_view, self)
-        cache_panel(live_view, live_panel)
-        return live_panel
-
-    def get_live_panel_view(self):
-        # type: () -> sublime.View|None
-        panel_name = self.live_panel_name()
-        window = self.view.window()
-        return window.find_output_panel(panel_name)
 
     def handle_input(self, text):
         # type: (str) -> None
@@ -1008,13 +974,15 @@ def get_scopes(view):
 
 class LivePanel:
 
-    def __init__(self, view, display_panel):
-        # type: (sublime.View, DisplayPanel) -> None
-        self.view = view
-        settings = view.settings()
-        self.pwd = settings.get('current_working_directory')
-        self.init_file = settings.get('gidterm_init_file')
+    def __init__(self, display_panel, panel_name, pwd, init_file):
+        # type: (sublime.View, DisplayPanel, str, str, str) -> None
         self.display_panel = display_panel
+        self.panel_name = panel_name
+        self.pwd = pwd
+        self.init_file = init_file
+        view = self.view = self.reset_live_view(display_panel, panel_name, pwd)
+        settings = view.settings()
+        settings.set('current_working_directory', pwd)
 
         # State of the output stream
         self.scope = ''  # type: str
@@ -1073,7 +1041,7 @@ class LivePanel:
         self.display_panel.set_tab_label(label)
 
     def make_label(self, size):
-        # type: (int, list[str]) -> str
+        # type: (int) -> str
         pwd = self.pwd
         command_words = self.command_words
         if size < 3:
@@ -1181,6 +1149,34 @@ class LivePanel:
     def show(self):
         self.display_panel.show_live()
 
+    def reset_live_view(self, display_panel, panel_name, pwd):
+        # type: (DisplayPanel, str, str) -> sublime.View
+        window = sublime.active_window()
+        view = window.find_output_panel(panel_name)
+        if view is not None:
+            uncache_panel(view)
+            window.destroy_output_panel(panel_name)
+        view = window.create_output_panel(panel_name)
+        view.set_read_only(True)
+        view.set_scratch(True)
+        view.set_line_endings('Unix')
+
+        settings = view.settings()
+        settings.set('color_scheme', display_panel.get_color_scheme())
+        settings.set('block_caret', True)
+        settings.set('caret_style', 'solid')
+        # prevent ST doing work that doesn't help here
+        settings.set('mini_diff', False)
+        settings.set('spell_check', False)
+
+        settings.set('is_gidterm', True)
+        settings.set('is_gidterm_live', True)
+        settings.set('current_working_directory', pwd)
+
+        cache_panel(view, self)
+
+        return view
+
     def push(self, end):
         # type: (int) -> None
         self.delete(0, self.pushed)
@@ -1254,7 +1250,7 @@ class LivePanel:
                     self.push(self.cursor)
                     command = '\n'.join(view.substr(region) for region in self.command_range)
                     # Close the panel and re-open
-                    view = self.view = self.display_panel.reset_live_view()
+                    view = self.view = self.reset_live_view(self.display_panel, self.panel_name, self.pwd)
                     cache_panel(view, self)
                     self.display_panel.show_live()
                     # Re-add the command without prompts. Note that it has been pushed.
