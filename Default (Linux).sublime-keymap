@@ -2,7 +2,6 @@
 {"keys": ["shift+ctrl+g"], "command": "gidterm"},
 {"keys": ["ctrl+enter"], "command": "gidterm_focus_live", "context": [{"key": "setting.is_gidterm_display"}]},
 {"keys": ["shift+ctrl+enter"], "command": "gidterm_focus_display", "context": [{"key": "setting.is_gidterm_live"}]},
-{"keys": ["shift+ctrl+backspace"], "command": "gidterm_hide_live", "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["shift+ctrl+pageup"], "command": "gidterm_select", "args": {"forward": false}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["shift+ctrl+pagedown"], "command": "gidterm_select", "args": {"forward": true}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["shift+ctrl+insert"], "command": "gidterm_insert", "args": {"strip": true}, "context": [{"key": "setting.is_gidterm"}]},

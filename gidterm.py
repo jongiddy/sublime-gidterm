@@ -776,8 +776,6 @@ class DisplayPanel:
 
         self.command_history = CommandHistory(view)
 
-        self.focus_in_live = True
-
         self.set_tab_label('gidterm starting\u2026')
 
         self.live_panel = LivePanel(
@@ -862,7 +860,6 @@ class DisplayPanel:
         self.view.set_name(label)
 
     def focus_display(self):
-        self.focus_in_live = False
         window = self.view.window()
         n = window.num_groups()
         for group in range(n):
@@ -872,7 +869,6 @@ class DisplayPanel:
                 break
 
     def focus_live(self):
-        self.focus_in_live = True
         panel_name = self.live_panel_name()
         window = self.view.window()
         view = window.find_output_panel(panel_name)
@@ -883,12 +879,6 @@ class DisplayPanel:
         panel_name = self.live_panel_name()
         window = self.view.window()
         window.run_command('show_panel', {'panel': 'output.{}'.format(panel_name)})
-
-    def hide_live(self):
-        self.focus_in_live = False
-        panel_name = self.live_panel_name()
-        window = self.view.window()
-        window.run_command('show_panel', {'panel': 'output.{}'.format(panel_name), 'toggle': True})
 
     def add_output(self, text, scopes, command_range):
         # type: (str, dict[str, list[sublime.Region]], list[sublime.Region]|None) -> None
@@ -980,7 +970,8 @@ class LivePanel:
         self.panel_name = panel_name
         self.pwd = pwd
         self.init_file = init_file
-        view = self.view = self.reset_live_view(display_panel, panel_name, pwd)
+        self.is_active = False
+        view = self.view = self.reset_view(display_panel, panel_name, pwd)
         settings = view.settings()
         settings.set('current_working_directory', pwd)
 
@@ -1024,6 +1015,10 @@ class LivePanel:
     def get_display_panel(self):
         # type: () -> DisplayPanel
         return self.display_panel
+
+    def set_active(self, is_active):
+        # (bool) -> None
+        self.is_active = is_active
 
     def focus_display(self):
         self.display_panel.focus_display()
@@ -1144,16 +1139,14 @@ class LivePanel:
             self.buffered += text
         else:
             self.terminal.send(text)
-            self.show()
+            sublime.active_window().run_command('show_panel', {'panel': 'output.{}'.format(self.panel_name)})
 
-    def show(self):
-        self.display_panel.show_live()
-
-    def reset_live_view(self, display_panel, panel_name, pwd):
+    def reset_view(self, display_panel, panel_name, pwd):
         # type: (DisplayPanel, str, str) -> sublime.View
         window = sublime.active_window()
         view = window.find_output_panel(panel_name)
         if view is not None:
+            # uncache first, so event listeners do not get called.
             uncache_panel(view)
             window.destroy_output_panel(panel_name)
         view = window.create_output_panel(panel_name)
@@ -1174,6 +1167,10 @@ class LivePanel:
         settings.set('current_working_directory', pwd)
 
         cache_panel(view, self)
+
+        window.run_command('show_panel', {'panel': 'output.{}'.format(panel_name)})
+        if self.is_active:
+            window.focus_view(view)
 
         return view
 
@@ -1249,9 +1246,7 @@ class LivePanel:
                     self.command_start = None
                     self.push(self.cursor)
                     command = '\n'.join(view.substr(region) for region in self.command_range)
-                    # Close the panel and re-open
-                    view = self.view = self.reset_live_view(self.display_panel, self.panel_name, self.pwd)
-                    cache_panel(view, self)
+                    view = self.view = self.reset_view(self.display_panel, self.panel_name, self.pwd)
                     self.display_panel.show_live()
                     # Re-add the command without prompts. Note that it has been pushed.
                     self.append_text(command + '\n')
@@ -1701,12 +1696,6 @@ class GidtermFocusLive(sublime_plugin.TextCommand):
         get_panel(self.view).focus_live()
 
 
-class GidtermHideLive(sublime_plugin.TextCommand):
-
-    def run(self, edit):
-        get_panel(self.view).get_display_panel().hide_live()
-
-
 class GidtermSendCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, characters):
@@ -1779,7 +1768,7 @@ class GidtermSelectCommand(sublime_plugin.TextCommand):
             display_panel.prev_command()
 
 
-class GidtermListener(sublime_plugin.ViewEventListener):
+class GidtermDisplayListener(sublime_plugin.ViewEventListener):
 
     @classmethod
     def is_applicable(cls, settings):
@@ -1793,3 +1782,19 @@ class GidtermListener(sublime_plugin.ViewEventListener):
         view = self.view
         get_panel(view).close()
         uncache_panel(view)
+
+
+# Panels do not trigger `ViewEventListener` so use `EventListener`
+class GidtermLiveListener(sublime_plugin.EventListener):
+
+    def on_activated(self, view):
+        if view.settings().get('is_gidterm_live', False):
+            panel = get_panel(view)
+            if panel is not None:
+                panel.set_active(True)
+
+    def on_deactivated(self, view):
+        if view.settings().get('is_gidterm_live', False):
+            panel = get_panel(view)
+            if panel is not None:
+                panel.set_active(False)

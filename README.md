@@ -41,6 +41,5 @@ When focus is in the display window, control keys will perform Sublime Text acti
 GidTerm supplies some useful key combinations that work in either view:
 - `Ctrl-Enter` to open and focus in the prompt panel
 - `Ctrl-Shift-Enter` to focus in the display window
-- `Ctrl-Shift-Backspace` to focus in the display window and close the prompt panel
 - `Ctrl-Shift-PageUp` and `Ctrl-Shift-PageDown` to focus in the display window and select the previous or next command respectively
 - `Ctrl-Shift-Insert` to insert the clipboard into the terminal with surrounding whitespace removed. To insert the clipboard without trimming whitespace, use `Ctrl-Shift-V` in the prompt panel or `Ctrl-V` in the display window.
