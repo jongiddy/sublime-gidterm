@@ -1407,7 +1407,8 @@ class LivePanel:
                     break
             else:
                 self.terminal_closed()
-            view.run_command('gidterm_cursor', {'position': self.cursor})
+            if all(region.empty() for region in view.sel()):
+                view.run_command('gidterm_cursor', {'position': self.cursor})
 
     def terminal_closed(self):
         # type: () -> None
