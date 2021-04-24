@@ -39,6 +39,7 @@ When focus is in the prompt panel, control keys will perform terminal actions (e
 When focus is in the display window, control keys will perform Sublime Text actions (e.g. the cursor up key will move the cursor up one line and `Ctrl-C` will copy the current selection). 
 
 GidTerm supplies some useful key combinations that work in either view:
+- `Ctrl-End` to move to end of display window and follow new output
 - `Ctrl-Enter` to open and focus in the prompt panel
 - `Ctrl-Shift-Enter` to focus in the display window
 - `Ctrl-Shift-PageUp` and `Ctrl-Shift-PageDown` to focus in the display window and select the previous or next command respectively

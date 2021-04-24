@@ -1,6 +1,7 @@
 [
 {"keys": ["shift+ctrl+g"], "command": "gidterm"},
 {"keys": ["ctrl+enter"], "command": "gidterm_focus_live", "context": [{"key": "setting.is_gidterm_display"}]},
+{"keys": ["ctrl+end"], "command": "gidterm_follow", "context": [{"key": "setting.is_gidterm_live"}]},
 {"keys": ["shift+ctrl+enter"], "command": "gidterm_focus_display", "context": [{"key": "setting.is_gidterm_live"}]},
 {"keys": ["shift+ctrl+pageup"], "command": "gidterm_select", "args": {"forward": false}, "context": [{"key": "setting.is_gidterm"}]},
 {"keys": ["shift+ctrl+pagedown"], "command": "gidterm_select", "args": {"forward": true}, "context": [{"key": "setting.is_gidterm"}]},

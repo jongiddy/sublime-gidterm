@@ -919,6 +919,10 @@ class DisplayPanel:
         sel.add_all(regions)
         view.show(sel)
 
+    def follow(self):
+        # Move cursor to end of view, causing window to follow new output
+        self.view.run_command('gidterm_cursor', {'position': self.view.size()})
+
 
 colors = (
     'black',
@@ -1592,6 +1596,12 @@ class LivePanel:
                 home = begin
             self.home_row, _ = view.rowcol(home)
 
+    def follow(self):
+        # move prompt panel cursor to current position
+        self.view.run_command('gidterm_cursor', {'position': self.cursor})
+        # move display panel cursor to end, causing it to follow output
+        self.display_panel.follow()
+
 
 def create_init_file(contents):
     # type: (str) -> str
@@ -1684,6 +1694,12 @@ class GidtermCursorCommand(sublime_plugin.TextCommand):
         sel.clear()
         sel.add(position)
         self.view.show(position)
+
+
+class GidtermFollowCommand(sublime_plugin.TextCommand):
+
+    def run(self, edit):
+        get_panel(self.view).follow()
 
 
 class GidtermFocusDisplay(sublime_plugin.TextCommand):
