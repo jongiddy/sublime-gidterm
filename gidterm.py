@@ -2,6 +2,7 @@ import codecs
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 import errno
+import fcntl
 import os
 import pty
 import re
@@ -213,6 +214,12 @@ class Terminal:
             except Exception:
                 traceback.print_exc()
             os.execvpe('bash', args, env)
+        else:
+            # Prevent this file descriptor ending up opened in any subsequent
+            # child processes, blocking the close(fd) in this process from
+            # terminating the shell.
+            state = fcntl.fcntl(self.fd, fcntl.F_GETFD)
+            fcntl.fcntl(self.fd, fcntl.F_SETFD, state | fcntl.FD_CLOEXEC)
 
     def stop(self):
         # type: () -> None
@@ -978,6 +985,7 @@ class LivePanel:
         view = self.view = self.reset_view(display_panel, panel_name, pwd)
         settings = view.settings()
         settings.set('current_working_directory', pwd)
+        settings.set('gidterm_init_file', init_file)
 
         # State of the output stream
         self.scope = ''  # type: str
@@ -1212,15 +1220,11 @@ class LivePanel:
     def handle_output(self):
         if self.terminal:
             view = self.view
-            filename = '/tmp/view-{}'.format(view.id())
             count = 0
             for t in self.terminal_output:
                 if isinstance(t, TerminalOutput.NotReady):
                     sublime.set_timeout(self.handle_output, 100)
                     break
-                with open(filename, 'a') as f:
-                    f.write(str(t))
-                    f.write('\n')
                 if isinstance(t, TerminalOutput.Prompt1Starts):
                     self.command_start = None
                     assert self.cursor == view.size(), (self.cursor, view.size())
@@ -1584,8 +1588,10 @@ class LivePanel:
             view = self.view
             home = view.text_point(self.home_row, 0)
             view.set_read_only(False)
-            view.run_command('gidterm_erase_text', {'begin': begin, 'end': end})
-            view.set_read_only(True)
+            try:
+                view.run_command('gidterm_erase_text', {'begin': begin, 'end': end})
+            finally:
+                view.set_read_only(True)
             if self.cursor > end:
                 self.cursor -= (end - begin)
             elif self.cursor > begin:

@@ -31,6 +31,7 @@ git pull
 If the existing tab contains a file, the shell will be in the same directory.
 
 GidTerm shows a prompt panel for running commands and a read-only display window for viewing output.
+Output appears in the display window once it has scrolled off the top of the terminal.
 
 Typing in either view sends text to the terminal, except for control keys.
 
