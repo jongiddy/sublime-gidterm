@@ -3,6 +3,7 @@ from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 import errno
 import fcntl
+import html
 import os
 import pty
 import re
@@ -331,6 +332,7 @@ class TerminalOutput:
         return self.iterator
 
     def loop(self, terminal):
+        # (Terminal) -> Iterator[namedtuple]
         while terminal:
             if terminal.ready():
                 s = terminal.receive()
@@ -785,6 +787,8 @@ class DisplayPanel:
 
         self.set_tab_label('gidterm starting\u2026')
 
+        self.preview_phantoms = sublime.PhantomSet(view, 'preview')
+
         self.live_panel = LivePanel(
             self,
             self.live_panel_name(),
@@ -793,6 +797,7 @@ class DisplayPanel:
         )
 
     def get_color_scheme(self):
+        # type: () -> str
         return self.view.settings().get('color_scheme')
 
     def live_panel_name(self):
@@ -804,6 +809,7 @@ class DisplayPanel:
         self.live_panel.handle_input(text)
 
     def close(self):
+        # type: () -> None
         panel_name = self.live_panel_name()
         window = sublime.active_window()
         live_view = window.find_output_panel(panel_name)
@@ -825,48 +831,62 @@ class DisplayPanel:
         settings = self.view.settings()
         settings.set('current_working_directory', pwd)
 
+    def cursor_position(self):
+        # type: () -> int|None
+        view = self.view
+        sel = view.sel()
+        if len(sel) != 1:
+            return None
+        region = sel[0]
+        if not region.empty():
+            return None
+        return region.begin()
+
     def append_text(self, text, scopes):
         # type: (str, dict[str, list[sublime.Region]]) -> None
-        text_begin = self.view.size()
-        # `force` to override read_only state
-        # `scroll_to_end: False` to stay at same position in text.
-        self.view.run_command('append', {'characters': text, 'force': True, 'scroll_to_end': False})
-        text_end = self.view.size()
-        # `scroll_to_end: False` prevents the cursor and text being moved when
-        # text is added. However, if the cursor is at the end of the text, this
-        # is ignored and the cursor moves and the text scrolls to the end.
-        # This is desirable as provides a way to follow the display if desired.
-        # As an exception, if `text_begin` is 0, then the cursor stays at start.
-        # We override this to follow initially until explict move away from end.
-        if text_begin == 0:
-            self.view.run_command('gidterm_cursor', {'position': text_end})
-        for scope, new_regions in scopes.items():
-            regions = self.view.get_regions(scope)
-            for new_region in new_regions:
-                # shift region to where text was appended
-                begin = text_begin + new_region.begin()
-                end = text_begin + new_region.end()
-                # trim region to where text was appended
-                if begin >= text_end:
-                    continue
-                if end > text_end:
-                    end = text_end
-                if regions and regions[-1].end() == begin:
-                    # merge into previous region
-                    prev = regions.pop()
-                    region = sublime.Region(prev.begin(), end)
-                else:
-                    region = sublime.Region(begin, end)
-                regions.append(region)
-            self.view.add_regions(
-                scope, regions, scope,
-                flags=sublime.DRAW_NO_OUTLINE | sublime.PERSISTENT
-            )
+        if text:
+            text_begin = self.view.size()
+            # `force` to override read_only state
+            # `scroll_to_end: False` to stay at same position in text.
+            self.view.run_command('append', {'characters': text, 'force': True, 'scroll_to_end': False})
+            text_end = self.view.size()
+            # `scroll_to_end: False` prevents the cursor and text being moved when
+            # text is added. However, if the cursor is at the end of the text, this
+            # is ignored and the cursor moves and the text scrolls to the end.
+            # This is desirable as provides a way to follow the display if desired.
+            # As an exception, if `text_begin` is 0, then the cursor stays at start.
+            # We override this to follow initially until explict move away from end.
+            if text_begin == 0:
+                self.view.run_command('gidterm_cursor', {'position': text_end})
+            for scope, new_regions in scopes.items():
+                regions = self.view.get_regions(scope)
+                for new_region in new_regions:
+                    # shift region to where text was appended
+                    begin = text_begin + new_region.begin()
+                    end = text_begin + new_region.end()
+                    # trim region to where text was appended
+                    if begin >= text_end:
+                        continue
+                    if end > text_end:
+                        end = text_end
+                    if regions and regions[-1].end() == begin:
+                        # merge into previous region
+                        prev = regions.pop()
+                        region = sublime.Region(prev.begin(), end)
+                    else:
+                        region = sublime.Region(begin, end)
+                    regions.append(region)
+                self.view.add_regions(
+                    scope, regions, scope,
+                    flags=sublime.DRAW_NO_OUTLINE | sublime.PERSISTENT
+                )
 
     def set_tab_label(self, label):
+        # type: (str) -> None
         self.view.set_name(label)
 
     def focus_display(self):
+        # type: () -> None
         window = self.view.window()
         n = window.num_groups()
         for group in range(n):
@@ -876,6 +896,7 @@ class DisplayPanel:
                 break
 
     def focus_live(self):
+        # type: () -> None
         panel_name = self.live_panel_name()
         window = self.view.window()
         view = window.find_output_panel(panel_name)
@@ -883,15 +904,51 @@ class DisplayPanel:
         window.focus_view(view)
 
     def show_live(self):
+        # type: () -> None
         panel_name = self.live_panel_name()
         window = self.view.window()
         window.run_command('show_panel', {'panel': 'output.{}'.format(panel_name)})
 
-    def add_output(self, text, scopes, command_range):
-        # type: (str, dict[str, list[sublime.Region]], list[sublime.Region]|None) -> None
-        if command_range:
-            self.command_history.append(command_range, self.view.size())
-        self.append_text(text, scopes)
+    def add_command_range(self, command_range):
+        # type: (list[sublime.Region]) -> None
+        self.command_history.append(command_range, self.view.size())
+
+    def add_output(self, text, home, cursor, scopes):
+        # type: (str, int, int, dict[str, list[sublime.Region]]) -> None
+        self.append_text(text[:home], scopes)
+        self.preview(text[home:], cursor)
+
+    def preview(self, text, cursor):
+        # type: (str, int) -> None
+        def escape(text):
+            # type: (str) -> str
+            return html.escape(text, quote=False).replace(' ', '&nbsp;')
+        text = text.rstrip('\n')  # avoid showing extra line for newline
+        if 0 <= cursor <= len(text):
+            before = text[:cursor]
+            here = text[cursor:cursor + 1] or ' '
+            after = text[cursor + 1:]
+            text = '%s<u>%s</u>%s' % (escape(before), escape(here), escape(after))
+        else:
+            text = escape(text)
+        end = self.view.size()
+        parts = text.split('\n')
+        if end == 0:
+            # we use LAYOUT_INLINE which needs extra spaces to keep terminal background wide
+            parts[0] = parts[0] + '&nbsp;' * 240
+        while len(parts) <= terminal_rows:
+            parts.append('')
+        text = '<br>'.join(parts)
+        text = '<body><style>div {background-color: #80808040;}</style><div>%s</div></body>' % text
+        if end == 0:
+            # Initially, use INLINE to keep preview on first line, not after it
+            layout = sublime.LAYOUT_INLINE
+        else:
+            # Otherwsie, use BLOCK to put after second-last line (assuming last line is empty).
+            end = end - 1
+            layout = sublime.LAYOUT_BLOCK
+        phantom = sublime.Phantom(sublime.Region(end, end), text, layout)
+        self.preview_phantoms.update([phantom])
 
     def next_command(self):
         # type: () -> None
@@ -927,6 +984,7 @@ class DisplayPanel:
         view.show(sel)
 
     def follow(self):
+        # type: () -> None
         # Move cursor to end of view, causing window to follow new output
         self.view.run_command('gidterm_cursor', {'position': self.view.size()})
 
@@ -997,7 +1055,6 @@ class LivePanel:
             row += 1
         self.cursor = cursor
         self.home_row = row
-        self.pushed = 0
 
         # Things that get set during command execution
         self.command_start = None  # type: int|None
@@ -1014,6 +1071,7 @@ class LivePanel:
         sublime.set_timeout(self.wait_for_prompt, 100)
 
     def close(self):
+        # type: () -> None
         if self.terminal:
             self.terminal_closed()
 
@@ -1029,10 +1087,11 @@ class LivePanel:
         return self.display_panel
 
     def set_active(self, is_active):
-        # (bool) -> None
+        # type: (bool) -> None
         self.is_active = is_active
 
     def focus_display(self):
+        # type: () -> None
         self.display_panel.focus_display()
 
     def set_title(self, extra=''):
@@ -1151,7 +1210,6 @@ class LivePanel:
             self.buffered += text
         else:
             self.terminal.send(text)
-            sublime.active_window().run_command('show_panel', {'panel': 'output.{}'.format(self.panel_name)})
 
     def reset_view(self, display_panel, panel_name, pwd):
         # type: (DisplayPanel, str, str) -> sublime.View
@@ -1180,45 +1238,60 @@ class LivePanel:
 
         cache_panel(view, self)
 
-        window.run_command('show_panel', {'panel': 'output.{}'.format(panel_name)})
         if self.is_active:
+            window.run_command('show_panel', {'panel': 'output.{}'.format(panel_name)})
             window.focus_view(view)
 
         return view
 
-    def push(self, end):
-        # type: (int) -> None
-        self.delete(0, self.pushed)
-        end -= self.pushed
-        self.pushed = 0
-        if end > 0:
-            text = self.view.substr(sublime.Region(0, end))
-            scopes = get_scopes(self.view)
-            self.display_panel.add_output(text, scopes, self.command_range)
-            self.pushed = end
+    def push(self):
+        # type: () -> None
+        view = self.view
+        home = view.text_point(self.home_row, 0)
+        scopes = get_scopes(self.view)
+        self.display_panel.add_output(
+            view.substr(sublime.Region(0, view.size())),
+            home,
+            self.cursor,
+            scopes,
+        )
+        view.set_read_only(False)
+        try:
+            view.run_command('gidterm_erase_text', {'begin': 0, 'end': home})
+        finally:
+            view.set_read_only(True)
+        assert self.cursor >= home
+        self.cursor -= home
+        self.home_row = 0
 
     def wait_for_prompt(self):
+        # type: () -> None
         if self.terminal:
+            count = 0
             for t in self.terminal_output:
                 if isinstance(t, TerminalOutput.NotReady):
                     sublime.set_timeout(self.wait_for_prompt, 100)
                     break
-                elif isinstance(t, TerminalOutput.OutputStops):
+                if isinstance(t, TerminalOutput.OutputStops):
                     # prompt about to be emitted
                     if self.buffered:
                         self.terminal.send(self.buffered)
-                        self.buffered = None
+                        self.buffered = ''
                     self.set_title()
                     sublime.set_timeout(self.handle_output, 0)
                     break
-                else:
-                    # TODO: not really unexpected - e.g. motd
-                    warn('unexpected token: {}'.format(t))
+                count += 1
+                if count > 100:
+                    # give other events a chance to run
+                    sublime.set_timeout(self.wait_for_prompt, 0)
+                    break
             else:
                 self.terminal_closed()
 
     def handle_output(self):
+        # type: () -> None
         if self.terminal:
+            update_preview = False
             view = self.view
             count = 0
             for t in self.terminal_output:
@@ -1230,36 +1303,39 @@ class LivePanel:
                     assert self.cursor == view.size(), (self.cursor, view.size())
                 elif isinstance(t, TerminalOutput.Prompt1Stops):
                     assert self.cursor == view.size()
-                    self.push(self.cursor)
-                    self.command_start = self.cursor - self.pushed
+                    self.command_start = self.cursor
                     self.command_range = []
-                    self.scope = None
+                    self.scope = ''
                 elif isinstance(t, TerminalOutput.Prompt2Starts):
                     assert self.cursor == view.size()
                     end = self.cursor - 1
                     assert view.substr(end) == '\n'
-                    self.command_range.append(sublime.Region(self.command_start, end - self.pushed))
+                    assert self.command_range is not None
+                    self.command_range.append(sublime.Region(self.command_start, end))
                     self.command_start = None
                     self.scope = 'sgr.magenta-on-default'
                 elif isinstance(t, TerminalOutput.Prompt2Stops):
                     assert self.cursor == view.size()
                     assert self.command_start is None
                     self.command_start = self.cursor
-                    self.scope = None
+                    self.scope = ''
                 elif isinstance(t, TerminalOutput.OutputStarts):
+                    self.out_start_time = datetime.now(timezone.utc)
                     assert self.cursor == view.size()
                     end = self.cursor - 1
                     assert view.substr(end) == '\n'
-                    self.command_range.append(sublime.Region(self.command_start, end - self.pushed))
+                    command_range = self.command_range
+                    assert command_range is not None
+                    command_range.append(sublime.Region(self.command_start, end))
                     self.command_start = None
-                    self.push(self.cursor)
-                    command = '\n'.join(view.substr(region) for region in self.command_range)
-                    view = self.view = self.reset_view(self.display_panel, self.panel_name, self.pwd)
-                    self.display_panel.show_live()
+                    self.display_panel.add_command_range(command_range)
+                    command = '\n'.join(view.substr(region) for region in command_range)
+                    self.command_range = None
+                    # view = self.view = self.reset_view(self.display_panel, self.panel_name, self.pwd)
                     # Re-add the command without prompts. Note that it has been pushed.
-                    self.append_text(command + '\n')
-                    self.cursor = self.pushed = view.size()
-                    view.add_regions('command', [sublime.Region(0, self.cursor)], 'sgr.default-on-yellow', flags=0)
+                    # self.append_text(command + '\n')
+                    # self.cursor = self.pushed = view.size()
+                    # view.add_regions('command', [sublime.Region(0, self.cursor)], 'sgr.default-on-yellow', flags=0)
                     try:
                         words = shlex.split(command.strip())
                     except ValueError as e:
@@ -1270,10 +1346,6 @@ class LivePanel:
                     if '/' in words[0]:
                         words[0] = words[0].rsplit('/', 1)[-1]
                     self.command_words = words
-                    self.command_range = None
-                    self.out_start_time = datetime.now(timezone.utc)
-                    self.home_row, col = view.rowcol(self.cursor)
-                    assert col == 0, col
                     self.set_title(str(timedelta_seconds(0.0)))
                     if not self.update_running:
                         sublime.set_timeout(self.update_elapsed, 1000)
@@ -1283,6 +1355,10 @@ class LivePanel:
                         # end of an executed command
                         status = t.status
                         self.display_status(status)
+                        self.home_row, col = view.rowcol(view.size())
+                        assert col == 0, col
+                        self.push()
+                        view = self.view = self.reset_view(self.display_panel, self.panel_name, self.pwd)
                         if t.pwd != self.pwd:
                             self.setpwd(t.pwd)
                             # For `cd` avoid duplicating the name in the title to show more
@@ -1300,6 +1376,7 @@ class LivePanel:
                         self.command_start = None
                 elif isinstance(t, TerminalOutput.Text):
                     self.overwrite(t.text)
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.CursorUp):
                     row, col = view.rowcol(self.cursor)
                     row -= t.n
@@ -1309,6 +1386,7 @@ class LivePanel:
                     if view.rowcol(cursor)[0] > row:
                         cursor = view.text_point(row + 1, 0) - 1
                     self.cursor = cursor
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.CursorDown):
                     row, col = view.rowcol(self.cursor)
                     row += t.n
@@ -1316,10 +1394,13 @@ class LivePanel:
                     if view.rowcol(cursor)[0] > row:
                         cursor = view.text_point(row + 1, 0) - 1
                     self.cursor = cursor
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.CursorLeft):
                     self.cursor = max(self.cursor - t.n, 0)
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.CursorRight):
                     self.cursor = min(self.cursor + t.n, view.size())
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.CursorMoveTo):
                     row = view.rowcol(view.size())[0] - terminal_rows + 1
                     if row < self.home_row:
@@ -1334,6 +1415,7 @@ class LivePanel:
                         # This puts cursor at end of line `row`. Maybe add spaces
                         # to get to column `col`?
                     self.cursor = cursor
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.CursorReturn):
                     # move cursor to start of line
                     classification = view.classify(self.cursor)
@@ -1344,6 +1426,7 @@ class LivePanel:
                             classes=sublime.CLASS_LINE_START
                         )
                         self.cursor = bol
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.LineFeed):
                     row, col = view.rowcol(self.cursor)
                     end = view.size()
@@ -1351,12 +1434,16 @@ class LivePanel:
                     if row == maxrow:
                         self.append_text('\n')
                         self.cursor = view.size()
+                        new_home_row = row - terminal_rows + 1
+                        if new_home_row > self.home_row:
+                            self.home_row = new_home_row
                     else:
                         row += 1
                         cursor = view.text_point(row, col)
                         if view.rowcol(cursor)[0] > row:
                             cursor = view.text_point(row + 1, 0) - 1
                         self.cursor = cursor
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.ClearToEndOfLine):
                     classification = view.classify(self.cursor)
                     if not classification & sublime.CLASS_LINE_END:
@@ -1366,6 +1453,7 @@ class LivePanel:
                             classes=sublime.CLASS_LINE_END
                         )
                         self.erase(self.cursor, eol)
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.ClearToStartOfLine):
                     classification = view.classify(self.cursor)
                     if not classification & sublime.CLASS_LINE_START:
@@ -1375,6 +1463,7 @@ class LivePanel:
                             classes=sublime.CLASS_LINE_START
                         )
                         self.erase(bol, self.cursor)
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.ClearLine):
                     classification = view.classify(self.cursor)
                     if classification & sublime.CLASS_LINE_START:
@@ -1394,13 +1483,16 @@ class LivePanel:
                             classes=sublime.CLASS_LINE_END
                         )
                     self.erase(bol, eol)
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.Insert):
                     # keep cursor at start
                     cursor = self.cursor
                     self.insert_text('\ufffd' * t.n)
                     self.cursor = cursor
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.Delete):
                     self.delete(self.cursor, self.cursor + t.n)
+                    update_preview = True
                 elif isinstance(t, TerminalOutput.SelectGraphicRendition):
                     scope = 'sgr.{}-on-{}'.format(t.foreground, t.background)
                     if scope == 'sgr.default-on-default':
@@ -1409,12 +1501,14 @@ class LivePanel:
                 else:
                     warn('unexpected token: {}'.format(t))
                 count += 1
-                if count > 20:
+                if count > 100:
                     # give other events a chance to run
                     sublime.set_timeout(self.handle_output, 0)
                     break
             else:
                 self.terminal_closed()
+            if update_preview:
+                self.push()
             if all(region.empty() for region in view.sel()):
                 view.run_command('gidterm_cursor', {'position': self.cursor})
 
@@ -1424,7 +1518,11 @@ class LivePanel:
         self.terminal.stop()
         self.terminal = None
         self.display_status('DISCONNECTED')
-        self.push(self.view.size())
+        view = self.view
+        self.home_row, col = view.rowcol(view.size())
+        assert col == 0, col
+        self.push()
+        self.view = self.reset_view(self.display_panel, self.panel_name, self.pwd)
 
     def update_elapsed(self):
         # type: () -> None
@@ -1434,14 +1532,6 @@ class LivePanel:
             now = datetime.now(timezone.utc)
             elapsed = (now - self.out_start_time).total_seconds()
             self.set_title(str(timedelta_seconds(elapsed)))
-            # If output has scrolled off the top of the terminal, then push
-            # it to the display window.
-            new_home_row = self.view.rowcol(self.view.size())[0] - terminal_rows + 1
-            if new_home_row > self.home_row:
-                self.home_row = new_home_row
-            home = self.view.text_point(self.home_row, 0)
-            if home > self.pushed:
-                self.push(home)
             sublime.set_timeout(self.update_elapsed, 1000)
 
     def display_status(self, status):
@@ -1586,7 +1676,7 @@ class LivePanel:
         # Delete the region, shifting any later characters into the space.
         if begin < end:
             view = self.view
-            home = view.text_point(self.home_row, 0)
+            assert begin >= view.text_point(self.home_row, 0)
             view.set_read_only(False)
             try:
                 view.run_command('gidterm_erase_text', {'begin': begin, 'end': end})
@@ -1596,13 +1686,9 @@ class LivePanel:
                 self.cursor -= (end - begin)
             elif self.cursor > begin:
                 self.cursor = begin
-            if home > end:
-                home -= (end - begin)
-            elif home > begin:
-                home = begin
-            self.home_row, _ = view.rowcol(home)
 
     def follow(self):
+        # type: () -> None
         # move prompt panel cursor to current position
         self.view.run_command('gidterm_cursor', {'position': self.cursor})
         # move display panel cursor to end, causing it to follow output
@@ -1624,6 +1710,7 @@ def create_init_file(contents):
 
 class GidtermCommand(sublime_plugin.TextCommand):
     def run(self, edit, pwd=None):
+        # type: (...) -> None
         init_script = None
         view = self.view
         settings = view.settings()
@@ -1676,17 +1763,20 @@ class GidtermCommand(sublime_plugin.TextCommand):
 
 class GidtermInsertTextCommand(sublime_plugin.TextCommand):
     def run(self, edit, point, characters):
+        # type: (...) -> None
         self.view.insert(edit, point, characters)
 
 
 class GidtermReplaceTextCommand(sublime_plugin.TextCommand):
     def run(self, edit, begin, end, characters):
+        # type: (...) -> None
         region = sublime.Region(begin, end)
         self.view.replace(edit, region, characters)
 
 
 class GidtermEraseTextCommand(sublime_plugin.TextCommand):
     def run(self, edit, begin, end):
+        # type: (...) -> None
         region = sublime.Region(begin, end)
         self.view.erase(edit, region)
 
@@ -1696,6 +1786,7 @@ class GidtermCursorCommand(sublime_plugin.TextCommand):
     # https://github.com/sublimehq/sublime_text/issues/485#issuecomment-337480388
 
     def run(self, edit, position):
+        # type: (...) -> None
         sel = self.view.sel()
         sel.clear()
         sel.add(position)
@@ -1705,24 +1796,34 @@ class GidtermCursorCommand(sublime_plugin.TextCommand):
 class GidtermFollowCommand(sublime_plugin.TextCommand):
 
     def run(self, edit):
-        get_panel(self.view).follow()
+        # type: (...) -> None
+        panel = get_panel(self.view)
+        if panel:
+            panel.follow()
 
 
 class GidtermFocusDisplay(sublime_plugin.TextCommand):
 
     def run(self, edit):
-        get_panel(self.view).focus_display()
+        # type: (...) -> None
+        panel = get_panel(self.view)
+        if panel:
+            panel.focus_display()
 
 class GidtermFocusLive(sublime_plugin.TextCommand):
 
     def run(self, edit):
-        get_panel(self.view).focus_live()
+        # type: (...) -> None
+        get_display_panel(self.view).focus_live()
 
 
 class GidtermSendCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, characters):
-        get_panel(self.view).handle_input(characters)
+        # type: (...) -> None
+        panel = get_panel(self.view)
+        if panel:
+            panel.handle_input(characters)
 
 
 _terminal_capability_map = {
@@ -1761,49 +1862,59 @@ _terminal_capability_map = {
 class GidtermCapabilityCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, cap):
+        # type: (...) -> None
         characters = _terminal_capability_map.get(cap)
         if characters is None:
             warn('unexpected terminal capability: {}'.format(cap))
             return
-        get_panel(self.view).handle_input(characters)
+        panel = get_panel(self.view)
+        if panel:
+            panel.handle_input(characters)
 
 
 class GidtermInsertCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, strip):
+        # type: (...) -> None
         panel = get_panel(self.view)
-        buf = sublime.get_clipboard()
-        if strip:
-            buf = buf.strip()
-        panel.handle_input(buf)
+        if panel is not None:
+            buf = sublime.get_clipboard()
+            if strip:
+                buf = buf.strip()
+            panel.handle_input(buf)
 
 
 class GidtermSelectCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, forward):
+        # type: (...) -> None
         view = self.view
         panel = get_panel(view)
-        display_panel = panel.get_display_panel()
-        display_panel.focus_display()
-        if forward:
-            display_panel.next_command()
-        else:
-            display_panel.prev_command()
+        if panel:
+            display_panel = panel.get_display_panel()
+            display_panel.focus_display()
+            if forward:
+                display_panel.next_command()
+            else:
+                display_panel.prev_command()
 
 
 class GidtermDisplayListener(sublime_plugin.ViewEventListener):
 
     @classmethod
     def is_applicable(cls, settings):
+        # type: (...) -> bool
         return settings.get('is_gidterm_display', False)
 
     @classmethod
     def applies_to_primary_view_only(cls):
+        # type: (...) -> bool
         return False
 
     def on_pre_close(self):
+        # type: () -> None
         view = self.view
-        get_panel(view).close()
+        get_display_panel(view).close()
         uncache_panel(view)
 
 
@@ -1811,13 +1922,17 @@ class GidtermDisplayListener(sublime_plugin.ViewEventListener):
 class GidtermLiveListener(sublime_plugin.EventListener):
 
     def on_activated(self, view):
+        # type: (sublime.View) -> None
         if view.settings().get('is_gidterm_live', False):
             panel = get_panel(view)
             if panel is not None:
+                assert isinstance(panel, LivePanel)
                 panel.set_active(True)
 
     def on_deactivated(self, view):
+        # type: (sublime.View) -> None
         if view.settings().get('is_gidterm_live', False):
             panel = get_panel(view)
             if panel is not None:
+                assert isinstance(panel, LivePanel)
                 panel.set_active(False)

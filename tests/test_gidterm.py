@@ -8,7 +8,7 @@ import time
 from unittest import TestCase
 
 import sublime  # type: ignore
-from unittesting import DeferrableTestCase
+from unittesting import DeferrableTestCase  # type: ignore
 
 version = sublime.version()
 
@@ -107,8 +107,6 @@ class TestGidTermCommand(DeferrableTestCase):
         try:
             self.assertNotEqual(view1.settings().get('current_working_directory'), '/tmp')
 
-            yield from wait_for_line(view1, r'.')
-
             send_command(view1, 'cd /tmp')
             send_command(view1, 'export TEST_VAR=apple')
             send_command(view1, 'echo DONE')
@@ -120,7 +118,6 @@ class TestGidTermCommand(DeferrableTestCase):
             # creates a new GidTerm with the same pwd and environment.
             view1.run_command('gidterm')
             view2 = window.active_view()
-            yield from wait_for_line(view2, r'.')
             self.assertNotEqual(view1, view2)
         finally:
             # Closing view1 before view2 causes ST to hang, even when done manually
@@ -150,3 +147,19 @@ class TestGidTermCommand(DeferrableTestCase):
                 self.assertEqual(view1.settings().get('current_working_directory'), os.path.dirname(f.name))
             finally:
                 close_view(view1)
+
+class TestDisplayPanel(DeferrableTestCase):
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        window = sublime.active_window()
+        window.run_command('gidterm', {'pwd': self.tmpdir})
+        self.view = window.active_view()
+        self.display_panel = gidterm.get_display_panel(self.view)
+
+    def tearDown(self):
+        close_view(self.view)
+        shutil.rmtree(self.tmpdir)
+
+    def test_display_panel(self):
+        self.assertEqual(self.view.settings().get('current_working_directory'), self.tmpdir)
